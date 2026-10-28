@@ -19,7 +19,7 @@
 
 #define QTPURPLE_UI_ID          "qtpurple"
 #define QTPURPLE_NAME           "QtPurple"
-#define QTPURPLE_VERSION        "0.3.0"
+#define QTPURPLE_VERSION        "0.4.0"
 #define QTPURPLE_WEBSITE        "https://github.com/"
 
 #define QTPURPLE_PREFS_ROOT     "/qtpurple"
@@ -35,6 +35,11 @@
 #define QTPURPLE_PREF_CONV_H    "/qtpurple/conversations/height"
 #define QTPURPLE_PREF_SHOW_REACTIONS "/qtpurple/conversations/show_reactions"
 #define QTPURPLE_PREF_EMOJI_CODES    "/qtpurple/conversations/emoji_codes"
+#define QTPURPLE_PREF_SHOW_TOOLBAR   "/qtpurple/conversations/show_toolbar"
+#define QTPURPLE_PREF_TIMESTAMPS     "/qtpurple/conversations/show_timestamps"
+#define QTPURPLE_PREF_FONT_FACE      "/qtpurple/conversations/font_face"
+#define QTPURPLE_PREF_FONT_COLOR     "/qtpurple/conversations/font_color"
+#define QTPURPLE_PREF_FONT_SIZE      "/qtpurple/conversations/font_size"
 
 #define QTPURPLE_PREF_SOUND         "/qtpurple/sound"
 #define QTPURPLE_PREF_SOUND_ENABLED "/qtpurple/sound/enabled"

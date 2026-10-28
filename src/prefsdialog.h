@@ -1,8 +1,9 @@
 /*
  * QtPurple - a Qt front end for libpurple
  *
- * Preferences: sounds, away/idle and system tray. Changes apply
- * immediately (libpurple preferences), like Pidgin.
+ * Preferences: buddy list, conversations, logging, status/idle, sounds,
+ * network, proxy and system tray. Changes apply immediately (libpurple
+ * preferences), like Pidgin.
  */
 #ifndef QTPURPLE_PREFSDIALOG_H
 #define QTPURPLE_PREFSDIALOG_H
@@ -41,6 +42,10 @@ private:
     QWidget *buildIdlePage();
     QWidget *buildTrayPage();
     QWidget *buildConversationsPage();
+    QWidget *buildBuddyListPage();
+    QWidget *buildLoggingPage();
+    QWidget *buildNetworkPage();
+    QWidget *buildProxyPage();
     void fillSoundList();
     int selectedEvent() const;
 

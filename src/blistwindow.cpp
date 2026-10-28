@@ -12,6 +12,8 @@
 #include "pluginsdialog.h"
 #include "pounces.h"
 #include "prefsdialog.h"
+#include "privacydialog.h"
+#include "roomlistdialog.h"
 #include "sound.h"
 #include "transferswindow.h"
 #include "trayicon.h"
@@ -136,6 +138,12 @@ static void mutePrefChanged(const char *, PurplePrefType, gconstpointer, gpointe
     BuddyListWindow::instance()->syncMuteAction();
 }
 
+/* Show offline / empty groups changed elsewhere (Preferences). */
+static void viewPrefChanged(const char *, PurplePrefType, gconstpointer, gpointer)
+{
+    BuddyListWindow::instance()->syncViewActions();
+}
+
 static void freeMenuActions(GList *list)
 {
     for (GList *l = list; l; l = l->next) {
@@ -254,6 +262,8 @@ BuddyListWindow::BuddyListWindow()
     purple_signal_connect(accounts, "account-signed-off", &s_signalHandle,
                           PURPLE_CALLBACK(blistSignalUpdate), nullptr);
     purple_prefs_connect_callback(&s_signalHandle, QTPURPLE_PREF_SOUND_MUTE, mutePrefChanged, nullptr);
+    purple_prefs_connect_callback(&s_signalHandle, QTPURPLE_PREF_OFFLINE, viewPrefChanged, nullptr);
+    purple_prefs_connect_callback(&s_signalHandle, QTPURPLE_PREF_EMPTY, viewPrefChanged, nullptr);
 
     resize(280, 560);
 }
@@ -268,6 +278,8 @@ void BuddyListWindow::buildMenus()
                        QKeySequence(Qt::CTRL | Qt::Key_C));
     buddies->addAction(tr("Get User &Info..."), this, &BuddyListWindow::showGetInfoDialog,
                        QKeySequence(Qt::CTRL | Qt::Key_I));
+    buddies->addAction(tr("&Room List..."), this, []() { RoomListDialog::showDialog(); },
+                       QKeySequence(Qt::CTRL | Qt::Key_R));
     buddies->addSeparator();
 
     m_showOffline = buddies->addAction(tr("Show &Offline Buddies"));
@@ -308,6 +320,7 @@ void BuddyListWindow::buildMenus()
     /* Tools */
     QMenu *tools = menuBar()->addMenu(tr("&Tools"));
     tools->addAction(tr("Buddy &Pounces"), this, []() { Pounces::showManager(); });
+    tools->addAction(tr("Pri&vacy"), this, []() { PrivacyDialog::showDialog(); });
     tools->addAction(tr("Plu&gins"), this, []() { PluginsDialog::showDialog(); },
                      QKeySequence(Qt::CTRL | Qt::Key_U));
     tools->addAction(tr("Pr&eferences"), this, []() { PreferencesDialog::showDialog(); },
@@ -394,6 +407,15 @@ void BuddyListWindow::closeEvent(QCloseEvent *event)
     if (TrayIcon::instance()->isShown())
         return;
     Core::requestQuit();
+}
+
+void BuddyListWindow::syncViewActions()
+{
+    const QSignalBlocker b1(m_showOffline);
+    const QSignalBlocker b2(m_showEmpty);
+    m_showOffline->setChecked(purple_prefs_get_bool(QTPURPLE_PREF_OFFLINE));
+    m_showEmpty->setChecked(purple_prefs_get_bool(QTPURPLE_PREF_EMPTY));
+    scheduleRebuild(0);
 }
 
 void BuddyListWindow::syncMuteAction()
@@ -922,6 +944,11 @@ void BuddyListWindow::buddyMenu(QMenu *menu, PurpleBuddy *buddy, PurpleContact *
             Pounces::editPounce(nullptr, account, QString::fromUtf8(name));
     });
 
+    const bool blocked = Privacy::isBlocked(account, QString::fromUtf8(name));
+    menu->addAction(blocked ? tr("Un&block") : tr("&Block"), this, [account, name, blocked]() {
+        Privacy::setBlocked(account, QString::fromUtf8(name), !blocked);
+    });
+
     menu->addSeparator();
 
     /* Alias the contact when it groups several buddies, otherwise the buddy. */
@@ -1289,6 +1316,10 @@ void BuddyListWindow::populateAccountsMenu()
         sub->addAction(tr("&Edit Account"), this, [account]() {
             if (QtPurple::accountExists(account))
                 AccountsDialog::editAccount(account);
+        });
+        sub->addAction(tr("&Privacy..."), this, [account]() {
+            if (QtPurple::accountExists(account))
+                PrivacyDialog::showDialog(account);
         });
 
         PurpleConnection *gc = purple_account_get_connection(account);

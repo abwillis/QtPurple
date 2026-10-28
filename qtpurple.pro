@@ -58,7 +58,10 @@ HEADERS += \
     src/pounces.h \
     src/trayicon.h \
     src/prefsdialog.h \
-    src/emoji.h
+    src/emoji.h \
+    src/messageinput.h \
+    src/roomlistdialog.h \
+    src/privacydialog.h
 
 SOURCES += \
     src/main.cpp \
@@ -79,4 +82,7 @@ SOURCES += \
     src/pounces.cpp \
     src/trayicon.cpp \
     src/prefsdialog.cpp \
-    src/emoji.cpp
+    src/emoji.cpp \
+    src/messageinput.cpp \
+    src/roomlistdialog.cpp \
+    src/privacydialog.cpp

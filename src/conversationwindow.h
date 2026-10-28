@@ -7,18 +7,19 @@
 #define QTPURPLE_CONVERSATIONWINDOW_H
 
 #include "common.h"
+#include "messageinput.h"
 
 #include <QHash>
 #include <QImage>
 #include <QList>
 #include <QMainWindow>
 #include <QPair>
-#include <QPlainTextEdit>
 #include <QStringList>
 #include <QTextBrowser>
 #include <QUrl>
 #include <QVector>
 
+class FormatBar;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
@@ -33,30 +34,6 @@ class HistoryView : public QTextBrowser
 public:
     explicit HistoryView(QWidget *parent = nullptr);
     QVariant loadResource(int type, const QUrl &name) override;
-};
-
-/* Message entry: Enter sends, Shift+Enter inserts a newline,
- * Ctrl+Up/Down walks the sent-message history, Tab completes nicks. */
-class InputEdit : public QPlainTextEdit
-{
-    Q_OBJECT
-public:
-    explicit InputEdit(QWidget *parent = nullptr);
-    void addHistory(const QString &text);
-    void setTabCompletion(bool on) { m_tabCompletion = on; }
-
-Q_SIGNALS:
-    void sendRequested();
-    void completeRequested();
-
-protected:
-    void keyPressEvent(QKeyEvent *event) override;
-
-private:
-    QStringList m_history;
-    int m_historyPos = -1;
-    QString m_draft;
-    bool m_tabCompletion = false;
 };
 
 class ConversationView : public QWidget
@@ -87,6 +64,9 @@ public:
     int hiddenReactions() const { return m_hiddenReactions; }
     void setShowReactions(bool on);
     void setEmojiCodes(bool on);
+    void setToolbarVisible(bool on);
+    /* Re-read connection flags (formatting the protocol supports). */
+    void updateFormatting();
 
     QString title() const;
     QIcon icon() const;
@@ -138,6 +118,7 @@ private:
     QLabel *m_typing;
     HistoryView *m_view;
     InputEdit *m_input;
+    FormatBar *m_format;
     QListWidget *m_users = nullptr;
     QLabel *m_userCount = nullptr;
     QHash<QString, QListWidgetItem *> m_userItems;

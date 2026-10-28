@@ -14,7 +14,9 @@
 #include "idle.h"
 #include "notifyui.h"
 #include "pounces.h"
+#include "privacydialog.h"
 #include "requestui.h"
+#include "roomlistdialog.h"
 #include "sound.h"
 #include "transferswindow.h"
 #include "trayicon.h"
@@ -124,6 +126,11 @@ void uiPrefsInit()
     purple_prefs_add_none(QTPURPLE_PREF_TRAY);
     purple_prefs_add_bool(QTPURPLE_PREF_TRAY_ENABLED, TRUE);
     purple_prefs_add_bool(QTPURPLE_PREF_TRAY_BLINK, TRUE);
+    purple_prefs_add_bool(QTPURPLE_PREF_SHOW_TOOLBAR, TRUE);
+    purple_prefs_add_bool(QTPURPLE_PREF_TIMESTAMPS, TRUE);
+    purple_prefs_add_string(QTPURPLE_PREF_FONT_FACE, "");
+    purple_prefs_add_string(QTPURPLE_PREF_FONT_COLOR, "");
+    purple_prefs_add_int(QTPURPLE_PREF_FONT_SIZE, 3);
     Sound::addPrefs();
     Emoji::addPrefs();
 }
@@ -156,6 +163,8 @@ void uiInit()
     purple_request_set_ui_ops(RequestUi::uiOps());
     purple_notify_set_ui_ops(NotifyUi::uiOps());
     purple_xfers_set_ui_ops(TransfersWindow::uiOps());
+    purple_roomlist_set_ui_ops(RoomListDialog::uiOps());
+    purple_privacy_set_ui_ops(Privacy::uiOps());
     purple_sound_set_ui_ops(Sound::uiOps());     /* runs Sound's init: event hooks */
     purple_idle_set_ui_ops(Idle::uiOps());
     Idle::init();

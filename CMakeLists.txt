@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(qtpurple VERSION 0.3.0 LANGUAGES CXX)
+project(qtpurple VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,6 +57,9 @@ set(QTPURPLE_SOURCES
     src/trayicon.cpp        src/trayicon.h
     src/prefsdialog.cpp     src/prefsdialog.h
     src/emoji.cpp           src/emoji.h
+    src/messageinput.cpp    src/messageinput.h
+    src/roomlistdialog.cpp  src/roomlistdialog.h
+    src/privacydialog.cpp   src/privacydialog.h
 )
 
 add_executable(qtpurple ${QTPURPLE_SOURCES})

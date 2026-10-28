@@ -72,6 +72,18 @@ const struct { const char *code; const char *glyph; } kBuiltin[] = {
     { "dog", "\U0001F436" },            { "cat", "\U0001F431" },
 };
 
+/* Shown in the toolbar picker, in this order. */
+const char *const kPicker[] = {
+    "smile", "grin", "joy", "rofl", "wink", "blush", "heart_eyes", "kiss",
+    "sunglasses", "thinking", "neutral_face", "rolling_eyes", "smirk", "sad",
+    "cry", "sob", "angry", "surprised", "scream", "flushed", "sweat_smile",
+    "sleeping", "upside_down_face", "hug", "facepalm", "shrug", "party",
+    "heart", "broken_heart", "like", "thumbsdown", "ok_hand", "clap", "wave",
+    "pray", "muscle", "raised_hands", "handshake", "eyes", "fire", "100",
+    "tada", "star", "sparkles", "rainbow", "coffee", "beer", "pizza", "cake",
+    "gift", "rocket", "bulb", "white_check_mark", "x", "warning", "question",
+};
+
 QHash<QString, QString> g_builtin;
 QHash<QString, QString> g_user;
 QString g_userPath;
@@ -302,6 +314,19 @@ QString render(const QString &html, bool codes)
         out = convertCodes(out);
     }
     return out;
+}
+
+QList<QPair<QString, QString>> pickerEntries()
+{
+    ensureBuiltin();
+    QList<QPair<QString, QString>> list;
+    for (const char *code : kPicker) {
+        const QString c = QString::fromLatin1(code);
+        const QString glyph = g_builtin.value(c);
+        if (!glyph.isEmpty())
+            list.append(qMakePair(QStringLiteral(":%1:").arg(c), glyph));
+    }
+    return list;
 }
 
 } // namespace Emoji

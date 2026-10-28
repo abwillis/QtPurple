@@ -28,6 +28,8 @@ Targets libpurple **2.x** (the API was checked against the 2.14.14 headers) and 
 - Slash commands through libpurple's command API (`/help`, `/join`, `/topic`, …); `//text` sends a literal slash
 - Buddy icon and status in the header, unread/typing tab colours, window alert for new IMs and nick mentions
 - Send File, Get Info, Add Buddy, Invite, Clear Scrollback
+- Formatting toolbar: bold, italic, underline, strikethrough, larger/smaller, font face, text and background color, reset, links, and an emoji picker; Ctrl+B/I/U; buttons the protocol cannot send are disabled, and protocols without HTML get plain text; pasted text is always inserted unformatted; toggle with **Conversation → Show Formatting Toolbar**
+- Block / Unblock in the IM **Conversation** menu
 - Reactions and emoji: emoji images sent as web links show their text (the emoji itself or a `:code:`), `:code:` text becomes the Unicode emoji (built-in table plus `<config dir>/emoji.txt`), and reaction notices ("Reacted with …") are shown in italics; both can be switched per conversation in the **Conversation** menu, with defaults under Preferences → Conversations
 
 **libpurple request/notify UI**
@@ -58,7 +60,21 @@ Targets libpurple **2.x** (the API was checked against the 2.14.14 headers) and 
 - Preferences: report idle time (never / from last sent message / keyboard and mouse), minutes before idle, change to Away when idle, auto-reply
 
 **Other**
-- Preferences dialog (Ctrl+P): conversations, sounds, away/idle, system tray
+**Room list**
+- Buddies → Room List (Ctrl+R): fetch a protocol's public room list (e.g. IRC `/list`, XMPP MUC directory), with the protocol's columns, categories that load when expanded, a filter, Join and Add Chat; Stop cancels a long fetch
+
+**Privacy**
+- Tools → Privacy (also per account in the Accounts menu): who can contact you (all, buddy list only, allow list only, everyone except the block list, nobody) plus the allow and block lists
+- Block / Unblock in the buddy context menu
+
+**Preferences (Ctrl+P)**
+- Buddy List: offline buddies, empty groups
+- Conversations: formatting toolbar, timestamps, typing notifications, chat nick changes, default font/color/size of your messages, reaction and emoji defaults
+- Logging: format, IM/chat/system logging
+- Status / Idle: idle reporting, auto-away, auto-reply, status used when idle, status at startup
+- Sounds, System Tray (as before)
+- Network: STUN, detected/public IP, UPnP/NAT-PMP, port range, TURN relay
+- Proxy: global proxy type, host, port, credentials
 - File transfer window (progress, cancel, open containing folder)
 - Plugin manager with a generic preference editor for plugins that provide a preference frame
 - Debug window fed by libpurple's debug output
@@ -132,6 +148,8 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 | Ctrl+B | Add buddy |
 | Ctrl+A / Ctrl+U / Ctrl+T | Accounts / Plugins / File transfers |
 | Ctrl+P | Preferences |
+| Ctrl+R | Room list |
+| Ctrl+B / Ctrl+I / Ctrl+U (message box) | Bold / italic / underline |
 | Ctrl+S | Mute sounds |
 | Ctrl+Q | Quit |
 
@@ -157,6 +175,9 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 | `src/trayicon.*` | System tray icon and menu |
 | `src/prefsdialog.*` | Preferences dialog |
 | `src/emoji.*` | Emoji `:code:` conversion, blocked-image fallback, reaction detection |
+| `src/messageinput.*` | Message box (rich text), formatting toolbar, HTML conversion for sending |
+| `src/roomlistdialog.*` | Room list browser, `PurpleRoomlistUiOps` |
+| `src/privacydialog.*` | Privacy settings and lists, `PurplePrivacyUiOps`, block/unblock |
 
 ## Design notes
 
@@ -167,13 +188,16 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 - **Sounds:** libpurple never decides on its own that a sound should play; the UI hooks the conversation/buddy signals and calls `purple_sound_play_event()`, which applies libpurple's "sounds while" rule and a 2-second repeat limit before calling back into `play_event`. Custom sound commands are split like a shell command line but run directly (no shell); `%s` becomes the file name.
 - **Pounces:** action names and attributes match Pidgin's (`open-window`, `popup-notify`, `send-message`, `execute-command`, `play-sound`). libpurple stores the owning UI with each pounce, so pounces created in Pidgin are not run by QtPurple. The pounce handler is registered before `pounces.xml` is loaded so loaded pounces get their actions.
 - **Idle:** the GNOME and X11 queries are synchronous but short (D-Bus timeout 250 ms) and libpurple only polls every few seconds. XScreenSaver is not used under XWayland, where it only sees input sent to X clients. If a backend stops answering, QtPurple falls back to its own window activity.
-- **Emoji and reactions:** remote `<img>` tags are still never fetched; they are replaced by their `alt`/`title` text. `:code:` conversion skips tags and link text. A message counts as a reaction when its plain text starts with "reacted with" or "reacted to" (up to four leading words, e.g. a name, are allowed), which matches notices such as "Reacted with a :rainbowsmile:" — protocols that word reactions differently are not detected. The view keeps the last 3000 messages so it can be redrawn when an option is switched. Per-conversation choices are stored on the buddy or chat entry (`qtpurple-show-reactions`, `qtpurple-emoji-codes` in `blist.xml`); conversations with people not on the buddy list use the defaults. Hiding reactions only affects the display: sounds, pounces and logs are unchanged.
+- **Emoji and reactions:** remote `<img>` tags are still never fetched; they are replaced by their `alt`/`title` text. `:code:` conversion skips tags and link text. A message counts as a reaction when its plain text (at most 160 characters) starts with "reacted with" or "reacted to", or has one to three words (e.g. a name) before that and also contains an emoji or a `:code:`, which matches notices such as "Reacted with a :rainbowsmile:" — protocols that word reactions differently are not detected. The view keeps the last 3000 messages so it can be redrawn when an option is switched. Per-conversation choices are stored on the buddy or chat entry (`qtpurple-show-reactions`, `qtpurple-emoji-codes` in `blist.xml`); conversations with people not on the buddy list use the defaults. Hiding reactions only affects the display: sounds, pounces and logs are unchanged.
+- **Formatting:** the message box keeps formatting as character formats and builds the HTML subset libpurple protocols accept (`<b> <i> <u> <s> <font face color back size> <a href>`), checking the connection's `PURPLE_CONNECTION_HTML`, `NO_BGCOLOR`, `NO_FONTSIZE` and `NO_URLDESC` flags. Only http, https, ftp, mailto, xmpp and irc links can be inserted.
+- **Room list:** the dialog holds the reference returned by `purple_roomlist_get_list()` and releases it (cancelling a running fetch first) when it fetches again, changes account or closes. Room pointers are dropped in the `destroy` callback.
+- **Privacy:** Block/Unblock use `purple_privacy_deny()`/`purple_privacy_allow()`, which update the lists (and the mode when necessary) the same way Pidgin does. Changing the mode calls `serv_set_permit_deny()` when connected.
 - **Tray:** the menu is rebuilt only when it is closed and never from inside one of its own actions; blinking only swaps the icon.
 - `QT_NO_KEYWORDS` is defined because GLib headers use `signals` as an identifier.
 
 ## Not implemented yet
 
-Showing a protocol's own emoji images (they would have to be downloaded), conversation log viewer, room-list browser, privacy/block-list editor, a full preferences dialog (only sounds, away/idle, and tray settings exist), sound themes, choosing the saved status used for idle-away, per-account proxy settings, custom smileys, voice/video, spell checking, and a rich-text formatting toolbar.
+Showing a protocol's own emoji images (they would have to be downloaded), conversation log viewer, a saved-status editor (saved statuses from Pidgin's `status.xml` can be chosen, but not created), sound themes, per-account proxy settings, custom smileys, sending inline images, voice/video, and spell checking.
 
 Idle limitation: on Wayland desktops other than GNOME (e.g. KDE Plasma on Wayland) no system idle source is used, so only activity in QtPurple's windows counts.
 

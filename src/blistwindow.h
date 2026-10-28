@@ -51,6 +51,7 @@ public:
     /* Switch to a transient status of this type, keeping the message. */
     void setStatusPrimitive(PurpleStatusPrimitive prim);
     void syncMuteAction();
+    void syncViewActions();
 
     /* Called from the blist ui ops. */
     void scheduleRebuild(int delayMs = 50);

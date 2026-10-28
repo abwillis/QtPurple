@@ -17,6 +17,8 @@
 
 #include "common.h"
 
+#include <QList>
+#include <QPair>
 #include <QString>
 
 namespace Emoji {
@@ -33,6 +35,10 @@ QString render(const QString &html, bool convertCodes);
 
 /* <config dir>/emoji.txt; one "name = emoji" per line, '#' comments. */
 QString userMapPath();
+
+/* Commonly used emoji for the formatting toolbar's picker:
+ * (":code:", glyph) pairs. */
+QList<QPair<QString, QString>> pickerEntries();
 
 } // namespace Emoji
 

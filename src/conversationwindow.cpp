@@ -7,6 +7,7 @@
 
 #include "blistwindow.h"
 #include "emoji.h"
+#include "privacydialog.h"
 
 #include <QAction>
 #include <QApplication>
@@ -68,69 +69,6 @@ QVariant HistoryView::loadResource(int, const QUrl &)
     /* Images we want are registered with QTextDocument::addResource();
      * never fetch anything else (remote or file: URLs from messages). */
     return QVariant();
-}
-
-/* ============================================================== InputEdit */
-
-InputEdit::InputEdit(QWidget *parent)
-    : QPlainTextEdit(parent)
-{
-    setTabChangesFocus(false);
-}
-
-void InputEdit::addHistory(const QString &text)
-{
-    if (m_history.isEmpty() || m_history.last() != text)
-        m_history.append(text);
-    while (m_history.size() > 100)
-        m_history.removeFirst();
-    m_historyPos = -1;
-    m_draft.clear();
-}
-
-void InputEdit::keyPressEvent(QKeyEvent *event)
-{
-    const int key = event->key();
-    const Qt::KeyboardModifiers mods = event->modifiers() & ~Qt::KeypadModifier;
-
-    if ((key == Qt::Key_Return || key == Qt::Key_Enter) && !(mods & Qt::ShiftModifier)) {
-        Q_EMIT sendRequested();
-        return;
-    }
-    if (key == Qt::Key_Tab && mods == Qt::NoModifier) {
-        if (m_tabCompletion)
-            Q_EMIT completeRequested();
-        else
-            focusNextChild();
-        return;
-    }
-    if ((mods & Qt::ControlModifier) && key == Qt::Key_Up) {
-        if (m_history.isEmpty())
-            return;
-        if (m_historyPos < 0) {
-            m_draft = toPlainText();
-            m_historyPos = m_history.size() - 1;
-        } else if (m_historyPos > 0) {
-            --m_historyPos;
-        }
-        setPlainText(m_history.at(m_historyPos));
-        moveCursor(QTextCursor::End);
-        return;
-    }
-    if ((mods & Qt::ControlModifier) && key == Qt::Key_Down) {
-        if (m_historyPos < 0)
-            return;
-        ++m_historyPos;
-        if (m_historyPos >= m_history.size()) {
-            m_historyPos = -1;
-            setPlainText(m_draft);
-        } else {
-            setPlainText(m_history.at(m_historyPos));
-        }
-        moveCursor(QTextCursor::End);
-        return;
-    }
-    QPlainTextEdit::keyPressEvent(event);
 }
 
 /* ========================================================== chat user item */
@@ -222,7 +160,9 @@ ConversationView::ConversationView(PurpleConversation *conv, QWidget *parent)
     m_input->setMinimumHeight(fontMetrics().lineSpacing() * 2 + 12);
     connect(m_input, &InputEdit::sendRequested, this, &ConversationView::send);
     connect(m_input, &InputEdit::completeRequested, this, &ConversationView::completeNick);
-    connect(m_input, &QPlainTextEdit::textChanged, this, &ConversationView::onTextChanged);
+    connect(m_input, &QTextEdit::textChanged, this, &ConversationView::onTextChanged);
+    m_format = new FormatBar(m_input, this);
+    m_format->setVisible(purple_prefs_get_bool(QTPURPLE_PREF_SHOW_TOOLBAR));
 
     QSplitter *vsplit = new QSplitter(Qt::Vertical, this);
     vsplit->setChildrenCollapsible(false);
@@ -256,6 +196,7 @@ ConversationView::ConversationView(PurpleConversation *conv, QWidget *parent)
     bl->setContentsMargins(0, 0, 0, 0);
     bl->setSpacing(2);
     bl->addWidget(m_typing);
+    bl->addWidget(m_format);
     bl->addWidget(m_input, 1);
     vsplit->addWidget(bottom);
     vsplit->setStretchFactor(0, 1);
@@ -269,6 +210,33 @@ ConversationView::ConversationView(PurpleConversation *conv, QWidget *parent)
     setFocusProxy(m_input);
     loadDisplayOptions();
     updateHeader();
+}
+
+void ConversationView::setToolbarVisible(bool on)
+{
+    m_format->setVisible(on);
+}
+
+void ConversationView::updateFormatting()
+{
+    PurpleConnection *gc = m_conv ? purple_conversation_get_gc(m_conv) : nullptr;
+    m_format->setConnectionFlags(gc ? int(gc->flags) : -1);
+}
+
+/* Drop the first '/' of the message text (not inside a tag): "//x" sends "/x". */
+static QString dropFirstSlash(const QString &html)
+{
+    bool inTag = false;
+    for (int i = 0; i < html.size(); ++i) {
+        const QChar c = html.at(i);
+        if (c == QLatin1Char('<'))
+            inTag = true;
+        else if (c == QLatin1Char('>'))
+            inTag = false;
+        else if (!inTag && c == QLatin1Char('/'))
+            return html.left(i) + html.mid(i + 1);
+    }
+    return html;
 }
 
 bool ConversationView::isChat() const
@@ -487,7 +455,9 @@ void ConversationView::renderLine(const Line &line, bool live)
 
     const QString body = Emoji::render(line.body, m_emojiCodes);
     const QString &name = line.name;
-    const QString stamp = QStringLiteral("<span style=\"color:#888a85\">(%1)</span> ").arg(ts);
+    const QString stamp = purple_prefs_get_bool(QTPURPLE_PREF_TIMESTAMPS)
+        ? QStringLiteral("<span style=\"color:#888a85\">(%1)</span> ").arg(ts)
+        : QString();
 
     QString html;
     if ((flags & (PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_ERROR | PURPLE_MESSAGE_NOTIFY)) || name.isEmpty()) {
@@ -549,18 +519,20 @@ void ConversationView::send()
     if (!m_conv)
         return;
 
-    QString text = m_input->toPlainText();
+    const QString text = m_input->toPlainText();
     if (text.trimmed().isEmpty())
         return;
 
-    m_input->addHistory(text);
+    PurpleConnection *gc = purple_conversation_get_gc(m_conv);
+    QString html = m_input->toPurpleHtml(true, gc ? int(gc->flags) : -1);
+
+    m_input->addHistory();
     {
         /* Don't let clearing the box send a "stopped typing" notification. */
         const QSignalBlocker block(m_input);
-        m_input->clear();
+        m_input->resetInput();
     }
 
-    PurpleConnection *gc = purple_conversation_get_gc(m_conv);
     PurplePluginProtocolInfo *info = prplInfo(gc);
 
     if (text.startsWith(QLatin1Char('/')) && !text.startsWith(QLatin1String("//"))) {
@@ -602,7 +574,7 @@ void ConversationView::send()
         if (!m_conv)
             return;
     } else if (text.startsWith(QLatin1String("//"))) {
-        text.remove(0, 1);
+        html = dropFirstSlash(html);
     }
 
     if (!gc || !QtPurple::connectionExists(gc)) {
@@ -610,8 +582,6 @@ void ConversationView::send()
         return;
     }
 
-    QString html = text.toHtmlEscaped();
-    html.replace(QLatin1Char('\n'), QLatin1String("<br>"));
     Utf8 msg(html);
 
     purple_idle_touch();
@@ -666,6 +636,7 @@ void ConversationView::updateHeader()
 {
     if (!m_conv)
         return;
+    updateFormatting();
 
     m_title->setText(title());
     PurpleAccount *account = purple_conversation_get_account(m_conv);
@@ -1125,6 +1096,24 @@ static void onBuddyStatusChanged(PurpleBuddy *buddy, PurpleStatus *, PurpleStatu
     onBuddyChanged(buddy, data);
 }
 
+/* Formatting support depends on the connection: refresh on sign-on/off. */
+static void onConnectionChanged(PurpleConnection *, gpointer)
+{
+    for (GList *l = purple_get_conversations(); l; l = l->next) {
+        if (ConversationView *view = ConversationWindow::viewFor(static_cast<PurpleConversation *>(l->data)))
+            view->updateFormatting();
+    }
+}
+
+static void onToolbarPrefChanged(const char *, PurplePrefType, gconstpointer value, gpointer)
+{
+    const bool on = GPOINTER_TO_INT(value) != 0;
+    for (GList *l = purple_get_conversations(); l; l = l->next) {
+        if (ConversationView *view = ConversationWindow::viewFor(static_cast<PurpleConversation *>(l->data)))
+            view->setToolbarVisible(on);
+    }
+}
+
 void ConversationWindow::init()
 {
     static bool done = false;
@@ -1143,6 +1132,13 @@ void ConversationWindow::init()
                           PURPLE_CALLBACK(onBuddyChanged), nullptr);
     purple_signal_connect(blist, "buddy-icon-changed", &s_signalHandle,
                           PURPLE_CALLBACK(onBuddyChanged), nullptr);
+    void *conns = purple_connections_get_handle();
+    purple_signal_connect(conns, "signed-on", &s_signalHandle,
+                          PURPLE_CALLBACK(onConnectionChanged), nullptr);
+    purple_signal_connect(conns, "signed-off", &s_signalHandle,
+                          PURPLE_CALLBACK(onConnectionChanged), nullptr);
+    purple_prefs_connect_callback(&s_signalHandle, QTPURPLE_PREF_SHOW_TOOLBAR,
+                                  onToolbarPrefChanged, nullptr);
 }
 
 /* ===================================================== ConversationWindow */
@@ -1428,6 +1424,12 @@ void ConversationWindow::populateConversationMenu()
                                                            QString::fromUtf8(name), QString(), QString());
         });
         add->setEnabled(gc && !purple_find_buddy(account, name.constData()));
+
+        const bool blocked = Privacy::isBlocked(account, QString::fromUtf8(name));
+        m_convMenu->addAction(blocked ? tr("Un&block") : tr("&Block"), this, [conv, name, blocked]() {
+            if (conversationExists(conv))
+                Privacy::setBlocked(purple_conversation_get_account(conv), QString::fromUtf8(name), !blocked);
+        });
     } else {
         QAction *invite = m_convMenu->addAction(tr("In&vite..."), this, [conv]() {
             if (conversationExists(conv) && purple_conversation_get_gc(conv))
@@ -1446,6 +1448,12 @@ void ConversationWindow::populateConversationMenu()
     connect(reactions, &QAction::toggled, this, [guard](bool on) {
         if (guard)
             guard->setShowReactions(on);
+    });
+    QAction *toolbar = m_convMenu->addAction(tr("Show &Formatting Toolbar"));
+    toolbar->setCheckable(true);
+    toolbar->setChecked(purple_prefs_get_bool(QTPURPLE_PREF_SHOW_TOOLBAR));
+    connect(toolbar, &QAction::toggled, this, [](bool on) {
+        purple_prefs_set_bool(QTPURPLE_PREF_SHOW_TOOLBAR, on ? TRUE : FALSE);
     });
     QAction *codes = m_convMenu->addAction(tr("Show &Emoji for :codes:"));
     codes->setCheckable(true);
