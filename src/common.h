@@ -12,13 +12,14 @@
 #include <purple.h>
 
 #include <QByteArray>
+#include <QColor>
 #include <QIcon>
 #include <QString>
 #include <QUrl>
 
 #define QTPURPLE_UI_ID          "qtpurple"
 #define QTPURPLE_NAME           "QtPurple"
-#define QTPURPLE_VERSION        "0.1.0"
+#define QTPURPLE_VERSION        "0.3.0"
 #define QTPURPLE_WEBSITE        "https://github.com/"
 
 #define QTPURPLE_PREFS_ROOT     "/qtpurple"
@@ -32,6 +33,20 @@
 #define QTPURPLE_PREF_CONV      "/qtpurple/conversations"
 #define QTPURPLE_PREF_CONV_W    "/qtpurple/conversations/width"
 #define QTPURPLE_PREF_CONV_H    "/qtpurple/conversations/height"
+#define QTPURPLE_PREF_SHOW_REACTIONS "/qtpurple/conversations/show_reactions"
+#define QTPURPLE_PREF_EMOJI_CODES    "/qtpurple/conversations/emoji_codes"
+
+#define QTPURPLE_PREF_SOUND         "/qtpurple/sound"
+#define QTPURPLE_PREF_SOUND_ENABLED "/qtpurple/sound/enabled"
+#define QTPURPLE_PREF_SOUND_FILE    "/qtpurple/sound/file"
+#define QTPURPLE_PREF_SOUND_METHOD  "/qtpurple/sound/method"
+#define QTPURPLE_PREF_SOUND_COMMAND "/qtpurple/sound/command"
+#define QTPURPLE_PREF_SOUND_VOLUME  "/qtpurple/sound/volume"
+#define QTPURPLE_PREF_SOUND_MUTE    "/qtpurple/sound/mute"
+#define QTPURPLE_PREF_SOUND_FOCUS   "/qtpurple/sound/conv_focus"
+#define QTPURPLE_PREF_TRAY          "/qtpurple/tray"
+#define QTPURPLE_PREF_TRAY_ENABLED  "/qtpurple/tray/enabled"
+#define QTPURPLE_PREF_TRAY_BLINK    "/qtpurple/tray/blink"
 
 /* Convert a (possibly NULL) UTF-8 C string coming from libpurple. */
 inline QString qs(const char *s)
@@ -57,6 +72,7 @@ private:
 
 namespace QtPurple {
 
+QColor statusColor(PurpleStatusPrimitive prim);
 QIcon statusIcon(PurpleStatusPrimitive prim, bool idle = false);
 QIcon chatIcon();
 QIcon protocolIcon(PurpleAccount *account);

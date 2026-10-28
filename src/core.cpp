@@ -9,10 +9,15 @@
 #include "blistwindow.h"
 #include "conversationwindow.h"
 #include "debugwindow.h"
+#include "emoji.h"
 #include "eventloop.h"
+#include "idle.h"
 #include "notifyui.h"
+#include "pounces.h"
 #include "requestui.h"
+#include "sound.h"
 #include "transferswindow.h"
+#include "trayicon.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -116,6 +121,11 @@ void uiPrefsInit()
     purple_prefs_add_none(QTPURPLE_PREF_CONV);
     purple_prefs_add_int(QTPURPLE_PREF_CONV_W, 680);
     purple_prefs_add_int(QTPURPLE_PREF_CONV_H, 480);
+    purple_prefs_add_none(QTPURPLE_PREF_TRAY);
+    purple_prefs_add_bool(QTPURPLE_PREF_TRAY_ENABLED, TRUE);
+    purple_prefs_add_bool(QTPURPLE_PREF_TRAY_BLINK, TRUE);
+    Sound::addPrefs();
+    Emoji::addPrefs();
 }
 
 void debugUiInit()
@@ -146,6 +156,10 @@ void uiInit()
     purple_request_set_ui_ops(RequestUi::uiOps());
     purple_notify_set_ui_ops(NotifyUi::uiOps());
     purple_xfers_set_ui_ops(TransfersWindow::uiOps());
+    purple_sound_set_ui_ops(Sound::uiOps());     /* runs Sound's init: event hooks */
+    purple_idle_set_ui_ops(Idle::uiOps());
+    Idle::init();
+    Pounces::init();                             /* before purple_pounces_load() */
 
     void *accounts = purple_accounts_get_handle();
     purple_signal_connect(accounts, "account-disabled", &g_signalHandle,
@@ -498,6 +512,7 @@ bool init(const Options &options, QString *error)
 
     BuddyListWindow::instance()->applyPrefs();
     purple_blist_show();
+    TrayIcon::instance()->applyPrefs();
 
     if (options.noLogin) {
         PurpleSavedStatus *off =
@@ -534,6 +549,7 @@ void shutdown()
     purple_signals_disconnect_by_handle(&g_signalHandle);
 
     BuddyListWindow::instance()->saveGeometryPrefs();
+    TrayIcon::instance()->shutdown();
 
     /* Close windows that would otherwise keep pointers into libpurple. */
     const auto widgets = QApplication::topLevelWidgets();
@@ -541,6 +557,7 @@ void shutdown()
         w->hide();
 
     purple_core_quit();
+    Idle::shutdown();
     EventLoop::shutdown();
 }
 

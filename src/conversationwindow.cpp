@@ -6,6 +6,7 @@
 #include "conversationwindow.h"
 
 #include "blistwindow.h"
+#include "emoji.h"
 
 #include <QAction>
 #include <QApplication>
@@ -20,6 +21,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPixmap>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -32,6 +34,7 @@
 
 #include <cstring>
 #include <ctime>
+#include <utility>
 
 static ConversationWindow *s_window = nullptr;
 static int s_signalHandle = 0;
@@ -264,6 +267,7 @@ ConversationView::ConversationView(PurpleConversation *conv, QWidget *parent)
     lay->addWidget(vsplit, 1);
 
     setFocusProxy(m_input);
+    loadDisplayOptions();
     updateHeader();
 }
 
@@ -317,11 +321,81 @@ void ConversationView::focusInput()
 void ConversationView::clearHistory()
 {
     m_view->clear();
+    m_lines.clear();
+    m_hiddenReactions = 0;
+}
+
+/* ------------------------------------------------------ display options */
+
+static const char kReactionsKey[] = "qtpurple-show-reactions";
+static const char kEmojiCodesKey[] = "qtpurple-emoji-codes";
+
+PurpleBlistNode *ConversationView::settingsNode() const
+{
+    if (!m_conv)
+        return nullptr;
+    PurpleAccount *account = purple_conversation_get_account(m_conv);
+    const char *name = purple_conversation_get_name(m_conv);
+    if (isChat()) {
+        PurpleChat *chat = purple_blist_find_chat(account, name);
+        return chat ? PURPLE_BLIST_NODE(chat) : nullptr;
+    }
+    PurpleBuddy *buddy = purple_find_buddy(account, name);
+    return buddy ? PURPLE_BLIST_NODE(buddy) : nullptr;
+}
+
+static bool nodeOption(PurpleBlistNode *node, const char *key, bool def)
+{
+    const char *v = node ? purple_blist_node_get_string(node, key) : nullptr;
+    if (!v)
+        return def;
+    return strcmp(v, "off") != 0;
+}
+
+void ConversationView::loadDisplayOptions()
+{
+    PurpleBlistNode *node = settingsNode();
+    m_showReactions = nodeOption(node, kReactionsKey, purple_prefs_get_bool(QTPURPLE_PREF_SHOW_REACTIONS));
+    m_emojiCodes = nodeOption(node, kEmojiCodesKey, purple_prefs_get_bool(QTPURPLE_PREF_EMOJI_CODES));
+}
+
+void ConversationView::saveDisplayOption(const char *key, bool on)
+{
+    if (PurpleBlistNode *node = settingsNode())
+        purple_blist_node_set_string(node, key, on ? "on" : "off");
+}
+
+void ConversationView::setShowReactions(bool on)
+{
+    if (on == m_showReactions)
+        return;
+    m_showReactions = on;
+    saveDisplayOption(kReactionsKey, on);
+    rerender();
+}
+
+void ConversationView::setEmojiCodes(bool on)
+{
+    if (on == m_emojiCodes)
+        return;
+    m_emojiCodes = on;
+    saveDisplayOption(kEmojiCodesKey, on);
+    rerender();
+}
+
+void ConversationView::rerender()
+{
+    m_view->clear();
+    m_hiddenReactions = 0;
+    for (const Line &line : std::as_const(m_lines))
+        renderLine(line, false);
+    QScrollBar *sb = m_view->verticalScrollBar();
+    sb->setValue(sb->maximum());
 }
 
 /* ------------------------------------------------------------- messages */
 
-QString ConversationView::processImages(const QString &html)
+QString ConversationView::processImages(const QString &html, QList<QPair<QUrl, QImage>> *images)
 {
     /* libpurple embeds stored images as <img id="N">. */
     static const QRegularExpression re(
@@ -349,6 +423,8 @@ QString ConversationView::processImages(const QString &html)
         }
         const QUrl url(QStringLiteral("purpleimg:%1-%2").arg(id).arg(++m_imageCounter));
         m_view->document()->addResource(QTextDocument::ImageResource, url, image);
+        if (images)
+            images->append(qMakePair(url, image));
         const int maxWidth = 360;
         if (image.width() > maxWidth)
             out += QStringLiteral("<img src=\"%1\" width=\"%2\">").arg(url.toString()).arg(maxWidth);
@@ -365,52 +441,90 @@ void ConversationView::writeMessage(const char *who, const char *alias, const ch
     if (!m_conv)
         return;
 
-    const QDateTime when = QDateTime::fromSecsSinceEpoch(qint64(mtime ? mtime : time(nullptr)));
+    Line line;
+    line.flags = flags;
+    line.mtime = mtime ? mtime : time(nullptr);
+    line.name = qs(alias && *alias ? alias : who).toHtmlEscaped();
+
+    /* "/me" handling, then linkify like Pidgin does for display. */
+    gchar *copy = g_strdup(message ? message : "");
+    line.me = purple_message_meify(copy, -1);
+    gchar *linked = purple_markup_linkify(copy);
+    line.body = processImages(qs(linked), &line.images);
+    g_free(linked);
+    g_free(copy);
+
+    line.reaction = !(flags & (PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_ERROR)) &&
+                    Emoji::isReaction(line.body);
+
+    /* Same limit as the history document. */
+    m_lines.append(line);
+    if (m_lines.size() > 3000)
+        m_lines.removeFirst();
+
+    renderLine(line, true);
+}
+
+void ConversationView::renderLine(const Line &line, bool live)
+{
+    const PurpleMessageFlags flags = line.flags;
+
+    if (line.reaction && !m_showReactions) {
+        ++m_hiddenReactions;
+        return;
+    }
+
+    /* After clear() the document may have dropped its resources. */
+    if (!live) {
+        for (const auto &img : line.images)
+            m_view->document()->addResource(QTextDocument::ImageResource, img.first, img.second);
+    }
+
+    const QDateTime when = QDateTime::fromSecsSinceEpoch(qint64(line.mtime));
     const bool showDate = (flags & PURPLE_MESSAGE_DELAYED) || when.date() != QDate::currentDate();
     const QString ts = when.toString(showDate ? QStringLiteral("yyyy-MM-dd HH:mm:ss")
                                               : QStringLiteral("HH:mm:ss"));
 
-    /* "/me" handling, then linkify like Pidgin does for display. */
-    gchar *copy = g_strdup(message ? message : "");
-    const bool isMe = purple_message_meify(copy, -1);
-    gchar *linked = purple_markup_linkify(copy);
-    const QString body = processImages(qs(linked));
-    g_free(linked);
-    g_free(copy);
-
-    const QString name = qs(alias && *alias ? alias : who).toHtmlEscaped();
+    const QString body = Emoji::render(line.body, m_emojiCodes);
+    const QString &name = line.name;
     const QString stamp = QStringLiteral("<span style=\"color:#888a85\">(%1)</span> ").arg(ts);
 
-    QString line;
+    QString html;
     if ((flags & (PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_ERROR | PURPLE_MESSAGE_NOTIFY)) || name.isEmpty()) {
         const QString color = (flags & PURPLE_MESSAGE_ERROR) ? QStringLiteral("#cc0000")
                                                              : QStringLiteral("#555753");
-        line = stamp + QStringLiteral("<span style=\"color:%1\">%2</span>").arg(color, body);
+        html = stamp + QStringLiteral("<span style=\"color:%1\">%2</span>").arg(color, body);
     } else {
         QString color = (flags & PURPLE_MESSAGE_SEND) ? QStringLiteral("#204a87")
                                                       : QStringLiteral("#a40000");
         QString shown = name;
         if (flags & PURPLE_MESSAGE_AUTO_RESP)
             shown += tr(" &lt;AUTO-REPLY&gt;");
-        if (isMe)
-            line = stamp + QStringLiteral("<b style=\"color:%1\">***%2</b> %3").arg(color, shown, body);
+        if (line.me)
+            html = stamp + QStringLiteral("<b style=\"color:%1\">***%2</b> %3").arg(color, shown, body);
+        else if (line.reaction)
+            html = stamp + QStringLiteral("<i style=\"color:#75507b\">%1: %2</i>").arg(shown, body);
         else
-            line = stamp + QStringLiteral("<b style=\"color:%1\">%2:</b> %3").arg(color, shown, body);
+            html = stamp + QStringLiteral("<b style=\"color:%1\">%2:</b> %3").arg(color, shown, body);
         if (flags & PURPLE_MESSAGE_NICK)
-            line = QStringLiteral("<span style=\"background-color:#fce94f\">%1</span>").arg(line);
+            html = QStringLiteral("<span style=\"background-color:#fce94f\">%1</span>").arg(html);
     }
 
     QScrollBar *sb = m_view->verticalScrollBar();
     const bool atBottom = sb->value() >= sb->maximum() - 4;
-    m_view->append(line);
+    m_view->append(html);
+    if (!live)
+        return;
     if (atBottom || (flags & PURPLE_MESSAGE_SEND))
         sb->setValue(sb->maximum());
 
-    /* Unread indicators. */
+    /* Unread indicators. A reaction is an event, not a new message. */
     ConversationWindow *win = ConversationWindow::instance();
     if (!win->isViewVisibleToUser(this)) {
         Activity a = NoActivity;
-        if (flags & PURPLE_MESSAGE_RECV)
+        if (line.reaction)
+            a = NewEvent;
+        else if (flags & PURPLE_MESSAGE_RECV)
             a = ((flags & PURPLE_MESSAGE_NICK) || !isChat()) ? NickSaid : NewMessage;
         else if (flags & (PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_ERROR))
             a = NewEvent;
@@ -1124,6 +1238,31 @@ void ConversationWindow::removeView(ConversationView *view)
         saveGeometryPrefs();
         hide();
     }
+    if (view->activity() >= ConversationView::NewMessage)
+        Q_EMIT unreadChanged();
+}
+
+int ConversationWindow::unreadCount() const
+{
+    int n = 0;
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        ConversationView *v = qobject_cast<ConversationView *>(m_tabs->widget(i));
+        if (v && v->activity() >= ConversationView::NewMessage)
+            ++n;
+    }
+    return n;
+}
+
+bool ConversationWindow::presentFirstUnread()
+{
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        ConversationView *v = qobject_cast<ConversationView *>(m_tabs->widget(i));
+        if (v && v->activity() >= ConversationView::NewMessage) {
+            presentView(v);
+            return true;
+        }
+    }
+    return false;
 }
 
 void ConversationWindow::presentView(ConversationView *view)
@@ -1210,6 +1349,7 @@ void ConversationWindow::onActivityChanged(ConversationView *view)
     default: break;
     }
     m_tabs->tabBar()->setTabTextColor(idx, color);
+    Q_EMIT unreadChanged();
 }
 
 void ConversationWindow::changeEvent(QEvent *event)
@@ -1295,6 +1435,25 @@ void ConversationWindow::populateConversationMenu()
         });
         invite->setEnabled(gc && info && info->chat_invite);
     }
+
+    m_convMenu->addSeparator();
+    QPointer<ConversationView> guard(view);
+    QAction *reactions = m_convMenu->addAction(
+        view->hiddenReactions() > 0 ? tr("Show &Reactions (%n hidden)", nullptr, view->hiddenReactions())
+                                    : tr("Show &Reactions"));
+    reactions->setCheckable(true);
+    reactions->setChecked(view->showReactions());
+    connect(reactions, &QAction::toggled, this, [guard](bool on) {
+        if (guard)
+            guard->setShowReactions(on);
+    });
+    QAction *codes = m_convMenu->addAction(tr("Show &Emoji for :codes:"));
+    codes->setCheckable(true);
+    codes->setChecked(view->emojiCodes());
+    connect(codes, &QAction::toggled, this, [guard](bool on) {
+        if (guard)
+            guard->setEmojiCodes(on);
+    });
 
     m_convMenu->addSeparator();
     m_convMenu->addAction(tr("Clear &Scrollback"), this, [view, conv]() {

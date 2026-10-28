@@ -48,6 +48,10 @@ public:
     void showNewImDialog();
     void showGetInfoDialog();
 
+    /* Switch to a transient status of this type, keeping the message. */
+    void setStatusPrimitive(PurpleStatusPrimitive prim);
+    void syncMuteAction();
+
     /* Called from the blist ui ops. */
     void scheduleRebuild(int delayMs = 50);
     void nodeRemoved(PurpleBlistNode *node);
@@ -105,6 +109,7 @@ private:
     QAction *m_manageAccounts;
     QAction *m_showOffline;
     QAction *m_showEmpty;
+    QAction *m_mute;
     QTimer *m_rebuildTimer;
 
     QHash<PurpleBlistNode *, QTreeWidgetItem *> m_items;

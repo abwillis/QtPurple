@@ -22,7 +22,7 @@
 
 namespace QtPurple {
 
-static QColor primitiveColor(PurpleStatusPrimitive prim)
+QColor statusColor(PurpleStatusPrimitive prim)
 {
     switch (prim) {
     case PURPLE_STATUS_AVAILABLE:
@@ -57,7 +57,7 @@ QIcon statusIcon(PurpleStatusPrimitive prim, bool idle)
     {
         QPainter p(&pm);
         p.setRenderHint(QPainter::Antialiasing, true);
-        QColor c = primitiveColor(prim);
+        QColor c = statusColor(prim);
         if (idle)
             c.setAlpha(110);
         if (prim == PURPLE_STATUS_INVISIBLE) {

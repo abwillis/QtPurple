@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(qtpurple VERSION 0.1.0 LANGUAGES CXX)
+project(qtpurple VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,21 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PURPLE REQUIRED IMPORTED_TARGET purple>=2.10.0 glib-2.0 gobject-2.0)
 
+# Optional pieces. Each one is used when found and can be switched off.
+option(QTPURPLE_WITH_MULTIMEDIA "Play sounds with Qt Multimedia (QSoundEffect)" ON)
+option(QTPURPLE_WITH_DBUS "GNOME idle monitor over D-Bus" ON)
+option(QTPURPLE_WITH_XSS "X11 idle time via libXss" ON)
+
+if(QTPURPLE_WITH_MULTIMEDIA)
+    find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Multimedia)
+endif()
+if(QTPURPLE_WITH_DBUS AND UNIX AND NOT APPLE)
+    find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS DBus)
+endif()
+if(QTPURPLE_WITH_XSS AND UNIX AND NOT APPLE)
+    pkg_check_modules(XSS QUIET IMPORTED_TARGET x11 xscrnsaver)
+endif()
+
 set(QTPURPLE_SOURCES
     src/main.cpp
     src/common.cpp          src/common.h
@@ -36,9 +51,36 @@ set(QTPURPLE_SOURCES
     src/transferswindow.cpp src/transferswindow.h
     src/pluginsdialog.cpp   src/pluginsdialog.h
     src/debugwindow.cpp     src/debugwindow.h
+    src/sound.cpp           src/sound.h
+    src/idle.cpp            src/idle.h
+    src/pounces.cpp         src/pounces.h
+    src/trayicon.cpp        src/trayicon.h
+    src/prefsdialog.cpp     src/prefsdialog.h
+    src/emoji.cpp           src/emoji.h
 )
 
 add_executable(qtpurple ${QTPURPLE_SOURCES})
+
+if(TARGET Qt${QT_VERSION_MAJOR}::Multimedia)
+    target_link_libraries(qtpurple PRIVATE Qt${QT_VERSION_MAJOR}::Multimedia)
+    target_compile_definitions(qtpurple PRIVATE QTPURPLE_HAVE_QTMULTIMEDIA)
+    message(STATUS "Sounds: Qt Multimedia")
+else()
+    message(STATUS "Sounds: external player / command only (Qt Multimedia not used)")
+endif()
+
+if(TARGET Qt${QT_VERSION_MAJOR}::DBus)
+    target_link_libraries(qtpurple PRIVATE Qt${QT_VERSION_MAJOR}::DBus)
+    target_compile_definitions(qtpurple PRIVATE QTPURPLE_HAVE_DBUS)
+    message(STATUS "Idle: GNOME idle monitor (D-Bus) enabled")
+endif()
+
+if(XSS_FOUND)
+    target_sources(qtpurple PRIVATE src/idle_x11.cpp src/idle_x11.h)
+    target_link_libraries(qtpurple PRIVATE PkgConfig::XSS)
+    target_compile_definitions(qtpurple PRIVATE QTPURPLE_HAVE_XSS)
+    message(STATUS "Idle: X11 screen saver extension enabled")
+endif()
 
 # GLib uses "signals" as an identifier; keep Qt's keywords out of the way.
 target_compile_definitions(qtpurple PRIVATE QT_NO_KEYWORDS)

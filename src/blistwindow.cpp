@@ -10,7 +10,11 @@
 #include "core.h"
 #include "debugwindow.h"
 #include "pluginsdialog.h"
+#include "pounces.h"
+#include "prefsdialog.h"
+#include "sound.h"
 #include "transferswindow.h"
+#include "trayicon.h"
 
 #include <QAction>
 #include <QApplication>
@@ -125,6 +129,11 @@ static void savedStatusChanged(PurpleSavedStatus *, PurpleSavedStatus *, gpointe
 static void blistSignalUpdate(gpointer, gpointer)
 {
     BuddyListWindow::instance()->scheduleRebuild();
+}
+
+static void mutePrefChanged(const char *, PurplePrefType, gconstpointer, gpointer)
+{
+    BuddyListWindow::instance()->syncMuteAction();
 }
 
 static void freeMenuActions(GList *list)
@@ -244,6 +253,7 @@ BuddyListWindow::BuddyListWindow()
                           PURPLE_CALLBACK(blistSignalUpdate), nullptr);
     purple_signal_connect(accounts, "account-signed-off", &s_signalHandle,
                           PURPLE_CALLBACK(blistSignalUpdate), nullptr);
+    purple_prefs_connect_callback(&s_signalHandle, QTPURPLE_PREF_SOUND_MUTE, mutePrefChanged, nullptr);
 
     resize(280, 560);
 }
@@ -297,10 +307,17 @@ void BuddyListWindow::buildMenus()
 
     /* Tools */
     QMenu *tools = menuBar()->addMenu(tr("&Tools"));
+    tools->addAction(tr("Buddy &Pounces"), this, []() { Pounces::showManager(); });
     tools->addAction(tr("Plu&gins"), this, []() { PluginsDialog::showDialog(); },
                      QKeySequence(Qt::CTRL | Qt::Key_U));
+    tools->addAction(tr("Pr&eferences"), this, []() { PreferencesDialog::showDialog(); },
+                     QKeySequence(Qt::CTRL | Qt::Key_P));
     tools->addAction(tr("File &Transfers"), this, []() { TransfersWindow::instance()->present(); },
                      QKeySequence(Qt::CTRL | Qt::Key_T));
+    m_mute = tools->addAction(tr("&Mute Sounds"));
+    m_mute->setCheckable(true);
+    m_mute->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_S));
+    connect(m_mute, &QAction::toggled, this, [](bool on) { Sound::setMuted(on); });
     tools->addSeparator();
     tools->addAction(tr("&Debug Window"), this, []() {
         DebugWindow *w = DebugWindow::instance();
@@ -353,6 +370,7 @@ void BuddyListWindow::applyPrefs()
     const QSignalBlocker b2(m_showEmpty);
     m_showOffline->setChecked(purple_prefs_get_bool(QTPURPLE_PREF_OFFLINE));
     m_showEmpty->setChecked(purple_prefs_get_bool(QTPURPLE_PREF_EMPTY));
+    syncMuteAction();
     syncStatusBox();
     scheduleRebuild(0);
 }
@@ -372,7 +390,16 @@ void BuddyListWindow::closeEvent(QCloseEvent *event)
 {
     saveGeometryPrefs();
     event->accept();
+    /* With a tray icon the buddy list only hides; Quit exits. */
+    if (TrayIcon::instance()->isShown())
+        return;
     Core::requestQuit();
+}
+
+void BuddyListWindow::syncMuteAction()
+{
+    const QSignalBlocker block(m_mute);
+    m_mute->setChecked(Sound::muted());
 }
 
 /* ---------------------------------------------------------------- status */
@@ -413,6 +440,17 @@ void BuddyListWindow::applyStatus()
         purple_savedstatus_set_message(saved, message);
     }
     purple_savedstatus_activate(saved);
+}
+
+void BuddyListWindow::setStatusPrimitive(PurpleStatusPrimitive prim)
+{
+    const int idx = m_status->findData(int(prim));
+    if (idx < 0)
+        return;
+    m_syncingStatus = true;
+    m_status->setCurrentIndex(idx);
+    m_syncingStatus = false;
+    applyStatus();
 }
 
 void BuddyListWindow::onStatusChosen(int)
@@ -878,6 +916,11 @@ void BuddyListWindow::buddyMenu(QMenu *menu, PurpleBuddy *buddy, PurpleContact *
                 serv_get_info(gc, name.constData());
         });
     }
+
+    menu->addAction(tr("Add Buddy &Pounce..."), this, [account, name]() {
+        if (QtPurple::accountExists(account))
+            Pounces::editPounce(nullptr, account, QString::fromUtf8(name));
+    });
 
     menu->addSeparator();
 

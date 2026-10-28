@@ -9,10 +9,15 @@
 #include "common.h"
 
 #include <QHash>
+#include <QImage>
+#include <QList>
 #include <QMainWindow>
+#include <QPair>
 #include <QPlainTextEdit>
 #include <QStringList>
 #include <QTextBrowser>
+#include <QUrl>
+#include <QVector>
 
 class QLabel;
 class QListWidget;
@@ -75,6 +80,14 @@ public:
     void updateHeader();
     void clearHistory();
 
+    /* Per-conversation display options (remembered on the buddy/chat
+     * entry when there is one; otherwise for this window only). */
+    bool showReactions() const { return m_showReactions; }
+    bool emojiCodes() const { return m_emojiCodes; }
+    int hiddenReactions() const { return m_hiddenReactions; }
+    void setShowReactions(bool on);
+    void setEmojiCodes(bool on);
+
     QString title() const;
     QIcon icon() const;
     Activity activity() const { return m_activity; }
@@ -94,8 +107,25 @@ private Q_SLOTS:
     void completeNick();
 
 private:
+    /* A message as received, kept so the view can be re-rendered when a
+     * display option changes. */
+    struct Line {
+        QString name;           /* HTML-escaped sender */
+        QString body;           /* linkified HTML, libpurple images resolved */
+        PurpleMessageFlags flags;
+        time_t mtime;
+        bool me;
+        bool reaction;
+        QList<QPair<QUrl, QImage>> images;
+    };
+
     bool isChat() const;
-    QString processImages(const QString &html);
+    QString processImages(const QString &html, QList<QPair<QUrl, QImage>> *images);
+    void renderLine(const Line &line, bool live);
+    void rerender();
+    PurpleBlistNode *settingsNode() const;
+    void loadDisplayOptions();
+    void saveDisplayOption(const char *key, bool on);
     QString realName(const QString &chatName) const;
     void setUserItem(QListWidgetItem *item, const QString &name, const QString &alias, int flags);
     void updateUserCount();
@@ -113,6 +143,10 @@ private:
     QHash<QString, QListWidgetItem *> m_userItems;
     Activity m_activity = NoActivity;
     int m_imageCounter = 0;
+    QVector<Line> m_lines;
+    bool m_showReactions = true;
+    bool m_emojiCodes = true;
+    int m_hiddenReactions = 0;
 };
 
 class ConversationWindow : public QMainWindow
@@ -130,6 +164,14 @@ public:
     bool viewHasFocus(ConversationView *view) const;
     bool isViewVisibleToUser(ConversationView *view) const;
     void saveGeometryPrefs();
+
+    /* Conversations with unread messages (NewMessage or NickSaid). */
+    int unreadCount() const;
+    /* Present the first conversation with unread messages. */
+    bool presentFirstUnread();
+
+Q_SIGNALS:
+    void unreadChanged();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
