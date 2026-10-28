@@ -9,6 +9,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
+#include <QByteArray>
 #include <QHash>
 #include <QStandardPaths>
 #include <QUrl>
@@ -41,6 +42,7 @@ const int kEventCount = int(sizeof(kEvents) / sizeof(kEvents[0]));
 
 int g_signalHandle = 0;
 qint64 g_loginMuteUntil = 0;        /* ms since epoch */
+bool g_eventReached = false;        /* set by uiPlayEvent, see requestEvent() */
 const qint64 kLoginMuteMs = 10000;  /* like Pidgin: no arrive/leave flood at sign-on */
 
 const Sound::EventInfo *findEvent(PurpleSoundEventID id)
@@ -163,6 +165,16 @@ void playWithQt(const QString &file)
         effect->setSource(QUrl::fromLocalFile(file));
         g_effects.insert(file, effect);
     }
+    if (effect->status() == QSoundEffect::Error) {
+        /* Qt Multimedia could not decode/open it: try an external player. */
+        purple_debug_warning("sound", "Qt Multimedia cannot play %s; trying an external player\n",
+                             file.toUtf8().constData());
+        g_effects.remove(file);
+        effect->deleteLater();
+        if (!playWithInstalledPlayer(file))
+            QApplication::beep();
+        return;
+    }
     effect->setVolume(qBound(0, purple_prefs_get_int(QTPURPLE_PREF_SOUND_VOLUME), 100) / 100.0);
     effect->play();         /* queued until loaded if necessary */
 }
@@ -207,6 +219,7 @@ void uiPlayFile(const char *filename)
 
 void uiPlayEvent(PurpleSoundEventID id)
 {
+    g_eventReached = true;
     if (Sound::muted())
         return;
     const Sound::EventInfo *e = findEvent(id);
@@ -214,10 +227,71 @@ void uiPlayEvent(PurpleSoundEventID id)
         return;
     if (!purple_prefs_get_bool(Utf8(Sound::enabledPref(*e))))
         return;
-    playFile(Sound::effectiveFile(*e));
+    const QString file = Sound::effectiveFile(*e);
+    purple_debug_info("sound", "Playing '%s': %s (method %s)\n", e->pref,
+                      file.isEmpty() ? "(no file)" : file.toUtf8().constData(),
+                      purple_prefs_get_string(QTPURPLE_PREF_SOUND_METHOD));
+    playFile(file);
 }
 
 /* --------------------------------------------------------- event hooks */
+
+bool eventEnabled(PurpleSoundEventID id);
+
+const char *eventName(PurpleSoundEventID id)
+{
+    const Sound::EventInfo *e = findEvent(id);
+    return e ? e->pref : "unknown";
+}
+
+/* libpurple's "sounds while" rule (purple_sound_play_required()), repeated
+ * here only to say in the debug log why an event stays silent. */
+bool statusAllows(PurpleAccount *account, QByteArray *why)
+{
+    const int rule = purple_prefs_get_int("/purple/sound/while_status");
+    if (rule == 3 || !account)
+        return true;
+    PurpleStatus *status = purple_account_get_active_status(account);
+    if (!status || !purple_status_is_online(status))
+        return true;
+    const bool available = purple_status_is_available(status);
+    const bool ok = (available && rule == 1) || (!available && rule == 2);
+    if (!ok) {
+        const char *name = purple_status_get_name(status);
+        *why = QByteArray("account status is '") + (name ? name : "?") + "' and Sounds while is '"
+               + (rule == 1 ? "Only when available" : rule == 2 ? "Only when not available" : "?") + "'";
+    }
+    return ok;
+}
+
+/* Every UI sound event goes through here: the reason an event is not
+ * played is written to the debug log (Tools > Debug Window, or -d). */
+void requestEvent(PurpleSoundEventID id, PurpleAccount *account, PurpleConversation *conv)
+{
+    const char *name = eventName(id);
+    if (Sound::muted()) {
+        purple_debug_info("sound", "'%s' not played: sounds are muted\n", name);
+        return;
+    }
+    if (!eventEnabled(id)) {
+        purple_debug_info("sound", "'%s' not played: the event is switched off in Preferences\n", name);
+        return;
+    }
+    if (conv && !purple_prefs_get_bool(QTPURPLE_PREF_SOUND_FOCUS) && purple_conversation_has_focus(conv)) {
+        purple_debug_info("sound", "'%s' not played: the conversation has focus\n", name);
+        return;
+    }
+    QByteArray why;
+    if (!statusAllows(account, &why)) {
+        purple_debug_info("sound", "'%s' not played: %s\n", name, why.constData());
+        return;
+    }
+    g_eventReached = false;
+    purple_sound_play_event(id, account);
+    if (!g_eventReached)
+        purple_debug_info("sound", "'%s' not played: suppressed by libpurple "
+                          "(same sound within 2 seconds, or a plugin)\n", name);
+}
 
 bool loginMuted()
 {
@@ -233,9 +307,7 @@ bool eventEnabled(PurpleSoundEventID id)
 /* Like Pidgin: optionally stay quiet for the conversation being read. */
 void playConvEvent(PurpleConversation *conv, PurpleSoundEventID id)
 {
-    if (conv && !purple_prefs_get_bool(QTPURPLE_PREF_SOUND_FOCUS) && purple_conversation_has_focus(conv))
-        return;
-    purple_sound_play_event(id, conv ? purple_conversation_get_account(conv) : nullptr);
+    requestEvent(id, conv ? purple_conversation_get_account(conv) : nullptr, conv);
 }
 
 void onAccountSignedOn(PurpleAccount *, gpointer)
@@ -246,25 +318,27 @@ void onAccountSignedOn(PurpleAccount *, gpointer)
 void onBuddySignedOn(PurpleBuddy *buddy, gpointer)
 {
     if (!loginMuted())
-        purple_sound_play_event(PURPLE_SOUND_BUDDY_ARRIVE, purple_buddy_get_account(buddy));
+        requestEvent(PURPLE_SOUND_BUDDY_ARRIVE, purple_buddy_get_account(buddy), nullptr);
 }
 
 void onBuddySignedOff(PurpleBuddy *buddy, gpointer)
 {
     if (!loginMuted())
-        purple_sound_play_event(PURPLE_SOUND_BUDDY_LEAVE, purple_buddy_get_account(buddy));
+        requestEvent(PURPLE_SOUND_BUDDY_LEAVE, purple_buddy_get_account(buddy), nullptr);
 }
 
 void onReceivedIm(PurpleAccount *account, char *, char *, PurpleConversation *conv,
                   PurpleMessageFlags flags, gpointer)
 {
-    if (flags & PURPLE_MESSAGE_DELAYED)
+    if (flags & PURPLE_MESSAGE_DELAYED) {
+        purple_debug_info("sound", "'im_recv' not played: delayed (offline/history) message\n");
         return;
+    }
     if (!conv) {
         /* No window yet: this message starts a conversation. */
-        purple_sound_play_event(eventEnabled(PURPLE_SOUND_FIRST_RECEIVE)
-                                    ? PURPLE_SOUND_FIRST_RECEIVE : PURPLE_SOUND_RECEIVE,
-                                account);
+        requestEvent(eventEnabled(PURPLE_SOUND_FIRST_RECEIVE)
+                         ? PURPLE_SOUND_FIRST_RECEIVE : PURPLE_SOUND_RECEIVE,
+                     account, nullptr);
         return;
     }
     playConvEvent(conv, PURPLE_SOUND_RECEIVE);
@@ -322,7 +396,7 @@ void onGotAttention(PurpleAccount *account, const char *, PurpleConversation *co
     if (conv)
         playConvEvent(conv, PURPLE_SOUND_GOT_ATTENTION);
     else
-        purple_sound_play_event(PURPLE_SOUND_GOT_ATTENTION, account);
+        requestEvent(PURPLE_SOUND_GOT_ATTENTION, account, nullptr);
 }
 
 void uiInit()
