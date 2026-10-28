@@ -29,6 +29,7 @@ Targets libpurple **2.x** (the API was checked against the 2.14.14 headers) and 
 - Buddy icon and status in the header, unread/typing tab colours, window alert for new IMs and nick mentions
 - Send File, Get Info, Add Buddy, Invite, Clear Scrollback
 - Formatting toolbar: bold, italic, underline, strikethrough, larger/smaller, font face, text and background color, reset, links, and an emoji picker; Ctrl+B/I/U; buttons the protocol cannot send are disabled, and protocols without HTML get plain text; pasted text is always inserted unformatted; toggle with **Conversation → Show Formatting Toolbar**
+- Images in messages: paste (Ctrl+V), drag and drop image files, or use the toolbar's **Image** button; images show as previews in the message box and are sent inline where the protocol allows it. Otherwise, in an IM you are offered a file transfer instead
 - Block / Unblock in the IM **Conversation** menu
 - Reactions and emoji: emoji images sent as web links show their text (the emoji itself or a `:code:`), `:code:` text becomes the Unicode emoji (built-in table plus `<config dir>/emoji.txt`), and reaction notices ("Reacted with …") are shown in italics; both can be switched per conversation in the **Conversation** menu, with defaults under Preferences → Conversations
 
@@ -175,7 +176,7 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 | `src/trayicon.*` | System tray icon and menu |
 | `src/prefsdialog.*` | Preferences dialog |
 | `src/emoji.*` | Emoji `:code:` conversion, blocked-image fallback, reaction detection |
-| `src/messageinput.*` | Message box (rich text), formatting toolbar, HTML conversion for sending |
+| `src/messageinput.*` | Message box (rich text, pasted/dropped images), formatting toolbar, HTML conversion for sending |
 | `src/roomlistdialog.*` | Room list browser, `PurpleRoomlistUiOps` |
 | `src/privacydialog.*` | Privacy settings and lists, `PurplePrivacyUiOps`, block/unblock |
 
@@ -190,6 +191,7 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 - **Idle:** the GNOME and X11 queries are synchronous but short (D-Bus timeout 250 ms) and libpurple only polls every few seconds. XScreenSaver is not used under XWayland, where it only sees input sent to X clients. If a backend stops answering, QtPurple falls back to its own window activity.
 - **Emoji and reactions:** remote `<img>` tags are still never fetched; they are replaced by their `alt`/`title` text. `:code:` conversion skips tags and link text. A message counts as a reaction when its plain text (at most 160 characters) starts with "reacted with" or "reacted to", or has one to three words (e.g. a name) before that and also contains an emoji or a `:code:`, which matches notices such as "Reacted with a :rainbowsmile:" — protocols that word reactions differently are not detected. The view keeps the last 3000 messages so it can be redrawn when an option is switched. Per-conversation choices are stored on the buddy or chat entry (`qtpurple-show-reactions`, `qtpurple-emoji-codes` in `blist.xml`); conversations with people not on the buddy list use the defaults. Hiding reactions only affects the display: sounds, pounces and logs are unchanged.
 - **Formatting:** the message box keeps formatting as character formats and builds the HTML subset libpurple protocols accept (`<b> <i> <u> <s> <font face color back size> <a href>`), checking the connection's `PURPLE_CONNECTION_HTML`, `NO_BGCOLOR`, `NO_FONTSIZE` and `NO_URLDESC` flags. Only http, https, ftp, mailto, xmpp and irc links can be inserted.
+- **Sending images:** each image is copied into libpurple's image store with `purple_imgstore_add_with_id()` and sent as `<img id="N">`, as Pidgin does; whether and how the image reaches the other side is up to the protocol plugin. This is only done when the connection has `PURPLE_CONNECTION_HTML` and not `PURPLE_CONNECTION_NO_IMAGES`. QtPurple releases its image-store reference 60 seconds after sending. Image files are sent with their original bytes (GIF animation is kept); pasted image data is sent as PNG, or as JPEG at quality 90 when the PNG is over 512 KB, the image has no transparency, and the JPEG is less than half the size. The limit is 10 MB per image. For file-transfer fallback the image is written to a temporary file (`qtpurple-image-*` in the system temp directory), which is removed when QtPurple quits.
 - **Room list:** the dialog holds the reference returned by `purple_roomlist_get_list()` and releases it (cancelling a running fetch first) when it fetches again, changes account or closes. Room pointers are dropped in the `destroy` callback.
 - **Privacy:** Block/Unblock use `purple_privacy_deny()`/`purple_privacy_allow()`, which update the lists (and the mode when necessary) the same way Pidgin does. Changing the mode calls `serv_set_permit_deny()` when connected.
 - **Tray:** the menu is rebuilt only when it is closed and never from inside one of its own actions; blinking only swaps the icon.
@@ -197,7 +199,7 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 
 ## Not implemented yet
 
-Showing a protocol's own emoji images (they would have to be downloaded), conversation log viewer, a saved-status editor (saved statuses from Pidgin's `status.xml` can be chosen, but not created), sound themes, per-account proxy settings, custom smileys, sending inline images, voice/video, and spell checking.
+Showing a protocol's own emoji images (they would have to be downloaded), conversation log viewer, a saved-status editor (saved statuses from Pidgin's `status.xml` can be chosen, but not created), sound themes, per-account proxy settings, custom smileys, voice/video, and spell checking.
 
 Idle limitation: on Wayland desktops other than GNOME (e.g. KDE Plasma on Wayland) no system idle source is used, so only activity in QtPurple's windows counts.
 

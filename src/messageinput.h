@@ -5,22 +5,29 @@
  *
  * The entry is a QTextEdit. Formatting is kept as character formats and
  * turned into the HTML subset libpurple protocols understand
- * (<b> <i> <u> <s> <font face color back size> <a href>) when sending.
- * Pasted or dropped content is always inserted as plain text.
+ * (<b> <i> <u> <s> <font face color back size> <a href> <img id>) when
+ * sending. Pasted or dropped text is inserted as plain text; pasted or
+ * dropped images (clipboard image data or local image files) are inserted
+ * as inline images and sent through libpurple's image store, like Pidgin.
  */
 #ifndef QTPURPLE_MESSAGEINPUT_H
 #define QTPURPLE_MESSAGEINPUT_H
 
 #include "common.h"
 
+#include <QByteArray>
+#include <QHash>
+#include <QImage>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <QTextCharFormat>
 #include <QTextDocumentFragment>
 #include <QTextEdit>
 #include <QWidget>
 
 class QAction;
+class QMimeData;
 class QToolBar;
 class QToolButton;
 
@@ -31,6 +38,15 @@ class InputEdit : public QTextEdit
 {
     Q_OBJECT
 public:
+    /* An image in the entry, as it will be sent. */
+    struct Image {
+        QByteArray data;        /* encoded file data (PNG, JPEG, GIF, ...) */
+        QString filename;       /* suggested name, e.g. "image.png" */
+    };
+
+    /* Largest image accepted (encoded size). */
+    static constexpr qint64 kMaxImageBytes = 10 * 1024 * 1024;
+
     explicit InputEdit(QWidget *parent = nullptr);
 
     void addHistory();
@@ -42,8 +58,23 @@ public:
     QTextCharFormat defaultFormat() const;
 
     /* The message as libpurple HTML; formatting is dropped when
-     * withFormatting is false. Flags are PurpleConnectionFlags. */
-    QString toPurpleHtml(bool withFormatting, int connectionFlags) const;
+     * withFormatting is false. Flags are PurpleConnectionFlags.
+     *
+     * Images: when the connection can carry inline images and imageIds is
+     * given, each image is added to libpurple's image store and written as
+     * <img id="N">; the caller owns one reference per id in imageIds and
+     * must release it with purple_imgstore_unref_by_id(). Images that
+     * cannot be sent inline are appended to notInline (when given). */
+    QString toPurpleHtml(bool withFormatting, int connectionFlags,
+                         QList<int> *imageIds = nullptr,
+                         QList<Image> *notInline = nullptr) const;
+
+    /* TRUE when the entry holds at least one image. */
+    bool hasImages() const;
+
+    /* Insert images; failures are reported to the user. */
+    void insertImageFiles(const QStringList &paths);
+    bool insertImage(const QImage &image);
 
     /* HTML font size 1..7 (3 is normal) of a character format. */
     static int htmlSize(const QTextCharFormat &fmt);
@@ -57,12 +88,22 @@ Q_SIGNALS:
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
+    bool canInsertFromMimeData(const QMimeData *source) const override;
+    void insertFromMimeData(const QMimeData *source) override;
+    QVariant loadResource(int type, const QUrl &name) override;
 
 private:
     void loadHistory(int pos);
+    bool insertEncoded(const QByteArray &data, const QString &filename, const QImage &image);
+    QStringList imageNamesInDocument() const;
+    void pruneImages();
 
     QList<QTextDocumentFragment> m_history;
     QList<QString> m_historyKeys;
+    QList<QStringList> m_historyImages;     /* image names per history entry */
+    QHash<QString, Image> m_images;         /* "qtpurple-input:N" -> data */
+    QHash<QString, QImage> m_imageCache;    /* decoded, for display */
+    int m_imageCounter = 0;
     int m_historyPos = -1;
     QTextDocumentFragment m_draft;
     bool m_tabCompletion = false;
@@ -91,6 +132,7 @@ private Q_SLOTS:
     void chooseBackground();
     void resetFormatting();
     void insertLink();
+    void insertImage();
 
 private:
     void merge(const QTextCharFormat &fmt);
@@ -109,6 +151,7 @@ private:
     QToolButton *m_background;
     QToolButton *m_reset;
     QToolButton *m_link;
+    QToolButton *m_image;
     QToolButton *m_emoji;
     int m_flags = -1;
 };

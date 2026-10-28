@@ -110,6 +110,9 @@ private:
     void setUserItem(QListWidgetItem *item, const QString &name, const QString &alias, int flags);
     void updateUserCount();
     void systemMessage(const QString &text, bool error = false);
+    /* Images that cannot be sent inline: offer a file transfer (IMs).
+     * FALSE when the user cancelled sending altogether. */
+    bool sendImagesAsFiles(const QList<InputEdit::Image> &images, bool hasText);
 
     PurpleConversation *m_conv;
     QLabel *m_icon;

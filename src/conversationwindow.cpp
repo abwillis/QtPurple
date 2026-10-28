@@ -6,6 +6,7 @@
 #include "conversationwindow.h"
 
 #include "blistwindow.h"
+#include "core.h"
 #include "emoji.h"
 #include "privacydialog.h"
 
@@ -20,7 +21,11 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QPointer>
 #include <QRegularExpression>
@@ -29,7 +34,9 @@
 #include <QSplitter>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTemporaryFile>
 #include <QTextCursor>
+#include <QTimer>
 #include <QTextDocument>
 #include <QVBoxLayout>
 
@@ -43,6 +50,54 @@ static int s_signalHandle = 0;
 static bool conversationExists(PurpleConversation *conv)
 {
     return conv && g_list_find(purple_get_conversations(), conv) != nullptr;
+}
+
+/* ------------------------------------------------------- sent images */
+
+/* Release our references to images in the image store. Delayed, so that
+ * protocols which echo the sent message back later can still show them. */
+static void releaseImagesLater(const QList<int> &ids)
+{
+    if (ids.isEmpty())
+        return;
+    QTimer::singleShot(60 * 1000, qApp, [ids]() {
+        if (Core::shuttingDown())
+            return;                 /* the image store is going away */
+        for (int id : ids)
+            purple_imgstore_unref_by_id(id);
+    });
+}
+
+/* Temporary files written for image file transfers; removed at exit. */
+static QStringList s_tempImageFiles;
+
+static void removeTempImageFiles()
+{
+    for (const QString &path : std::as_const(s_tempImageFiles))
+        QFile::remove(path);
+    s_tempImageFiles.clear();
+}
+
+/* Write an image to a temporary file for serv_send_file(). */
+static QString writeTempImage(const InputEdit::Image &img)
+{
+    static bool hooked = false;
+    if (!hooked) {
+        hooked = true;
+        QObject::connect(qApp, &QCoreApplication::aboutToQuit, qApp, removeTempImageFiles);
+    }
+    QString suffix = QFileInfo(img.filename).suffix();
+    if (suffix.isEmpty())
+        suffix = QStringLiteral("png");
+    QTemporaryFile f(QDir(QDir::tempPath()).filePath(QStringLiteral("qtpurple-image-XXXXXX.%1").arg(suffix)));
+    f.setAutoRemove(false);
+    if (!f.open() || f.write(img.data) != img.data.size()) {
+        f.remove();
+        return QString();
+    }
+    f.close();
+    s_tempImageFiles << f.fileName();
+    return f.fileName();
 }
 
 static PurplePluginProtocolInfo *prplInfo(PurpleConnection *gc)
@@ -524,7 +579,37 @@ void ConversationView::send()
         return;
 
     PurpleConnection *gc = purple_conversation_get_gc(m_conv);
-    QString html = m_input->toPurpleHtml(true, gc ? int(gc->flags) : -1);
+    const bool isCommand = text.startsWith(QLatin1Char('/')) && !text.startsWith(QLatin1String("//"));
+
+    /* Images become <img id> references into libpurple's image store; the
+     * ones the protocol cannot take inline are offered as file transfers. */
+    QList<int> imageIds;
+    QList<InputEdit::Image> notInline;
+    QString html = m_input->toPurpleHtml(true, gc ? int(gc->flags) : -1,
+                                         isCommand ? nullptr : &imageIds,
+                                         isCommand ? nullptr : &notInline);
+    struct ReleaseImages {
+        QList<int> *ids;
+        ~ReleaseImages() { releaseImagesLater(*ids); }
+    } releaseGuard{ &imageIds };
+
+    /* Message text without the image placeholders. */
+    const bool hasText = !QString(text).remove(QChar(QChar::ObjectReplacementCharacter)).trimmed().isEmpty();
+
+    if (!notInline.isEmpty()) {
+        /* The question below runs a nested event loop in which this
+         * conversation (and this view) can be closed. */
+        QPointer<ConversationView> self(this);
+        const bool go = sendImagesAsFiles(notInline, hasText);
+        if (!self)
+            return;
+        if (!go || !m_conv)
+            return;                 /* cancelled: the message stays in the box */
+        gc = purple_conversation_get_gc(m_conv);
+    }
+
+    /* Nothing left to send as a message (images only, sent as files). */
+    const bool emptyMessage = !hasText && imageIds.isEmpty();
 
     m_input->addHistory();
     {
@@ -535,7 +620,7 @@ void ConversationView::send()
 
     PurplePluginProtocolInfo *info = prplInfo(gc);
 
-    if (text.startsWith(QLatin1Char('/')) && !text.startsWith(QLatin1String("//"))) {
+    if (isCommand) {
         const QString cmdline = text.mid(1);
         QString markup = cmdline.toHtmlEscaped();
         markup.replace(QLatin1Char('\n'), QLatin1String("<br>"));
@@ -577,6 +662,9 @@ void ConversationView::send()
         html = dropFirstSlash(html);
     }
 
+    if (emptyMessage)
+        return;
+
     if (!gc || !QtPurple::connectionExists(gc)) {
         systemMessage(tr("Message not sent: you are not connected."), true);
         return;
@@ -593,6 +681,62 @@ void ConversationView::send()
         purple_conv_im_set_type_again(im, 0);
         purple_conv_im_send(im, msg);
     }
+}
+
+bool ConversationView::sendImagesAsFiles(const QList<InputEdit::Image> &images, bool hasText)
+{
+    PurpleConnection *gc = m_conv ? purple_conversation_get_gc(m_conv) : nullptr;
+    if (!gc || !QtPurple::connectionExists(gc)) {
+        systemMessage(tr("Message not sent: you are not connected."), true);
+        return false;
+    }
+
+    PurplePluginProtocolInfo *info = prplInfo(gc);
+    const QByteArray who(purple_conversation_get_name(m_conv));
+    const bool canSendFile = !isChat() && info && info->send_file &&
+                             (!info->can_receive_file || info->can_receive_file(gc, who.constData()));
+
+    if (!canSendFile) {
+        const QString why = isChat() ? tr("Images cannot be sent in this chat.")
+                                     : tr("This protocol cannot send images to %1.").arg(title());
+        if (!hasText) {
+            QMessageBox::information(this, tr("Send Images"), why);
+            return false;
+        }
+        const QMessageBox::StandardButton b = QMessageBox::question(
+            this, tr("Send Images"), why + QStringLiteral("\n\n") + tr("Send the text without the images?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        return b == QMessageBox::Yes;
+    }
+
+    const QMessageBox::StandardButton b = QMessageBox::question(
+        this, tr("Send Images"),
+        tr("This protocol cannot send images inside a message.\n\n"
+           "Send %n image(s) to %1 as a file transfer instead?", nullptr, images.size())
+            .arg(title()),
+        QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes);
+    if (b == QMessageBox::Cancel)
+        return false;
+    if (b == QMessageBox::No)
+        return hasText;             /* send the text only (nothing if there is none) */
+
+    PurpleConversation *conv = m_conv;
+    for (const InputEdit::Image &img : images) {
+        const QString path = writeTempImage(img);
+        if (path.isEmpty()) {
+            systemMessage(tr("%1 could not be saved for sending.").arg(img.filename), true);
+            continue;
+        }
+        /* The dialog above ran an event loop: re-check before each send. */
+        if (!conversationExists(conv) || !QtPurple::connectionExists(gc))
+            return false;
+#ifdef _WIN32
+        serv_send_file(gc, who.constData(), path.toUtf8().constData());
+#else
+        serv_send_file(gc, who.constData(), QFile::encodeName(path).constData());
+#endif
+    }
+    return true;
 }
 
 void ConversationView::onTextChanged()
