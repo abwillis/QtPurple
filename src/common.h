@@ -19,7 +19,7 @@
 
 #define QTPURPLE_UI_ID          "qtpurple"
 #define QTPURPLE_NAME           "QtPurple"
-#define QTPURPLE_VERSION        "0.5.1"
+#define QTPURPLE_VERSION        "0.5.2"
 #define QTPURPLE_WEBSITE        "https://github.com/"
 
 #define QTPURPLE_PREFS_ROOT     "/qtpurple"

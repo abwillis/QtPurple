@@ -12,6 +12,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QUrl>
 #include <QVector>
 
@@ -155,28 +156,101 @@ void clearEffects()
     g_effects.clear();
 }
 
-void playWithQt(const QString &file)
+const char *effectStatusName(QSoundEffect::Status st)
+{
+    switch (st) {
+    case QSoundEffect::Null:    return "null";
+    case QSoundEffect::Loading: return "loading";
+    case QSoundEffect::Ready:   return "ready";
+    case QSoundEffect::Error:   return "error";
+    }
+    return "?";
+}
+
+/* Create (or find) the effect for a file and start loading it. */
+QSoundEffect *effectFor(const QString &file)
 {
     QSoundEffect *effect = g_effects.value(file, nullptr);
-    if (!effect) {
-        if (g_effects.size() >= 16)
-            clearEffects();
-        effect = new QSoundEffect(qApp);
-        effect->setSource(QUrl::fromLocalFile(file));
-        g_effects.insert(file, effect);
-    }
-    if (effect->status() == QSoundEffect::Error) {
-        /* Qt Multimedia could not decode/open it: try an external player. */
-        purple_debug_warning("sound", "Qt Multimedia cannot play %s; trying an external player\n",
+    if (effect)
+        return effect;
+    if (g_effects.size() >= 16)
+        clearEffects();
+    effect = new QSoundEffect(qApp);
+    effect->setSource(QUrl::fromLocalFile(file));
+    g_effects.insert(file, effect);
+    QObject::connect(effect, &QSoundEffect::statusChanged, effect, [effect, file]() {
+        purple_debug_info("sound", "Qt Multimedia: %s is %s\n", file.toUtf8().constData(),
+                          effectStatusName(effect->status()));
+    });
+    return effect;
+}
+
+void dropEffect(const QString &file)
+{
+    if (QSoundEffect *e = g_effects.take(file))
+        e->deleteLater();
+}
+
+void playWithQt(const QString &file)
+{
+    QSoundEffect *effect = effectFor(file);
+    const QSoundEffect::Status st = effect->status();
+
+    if (st == QSoundEffect::Error) {
+        /* Qt Multimedia could not open/decode it: use an external player. */
+        purple_debug_warning("sound", "Qt Multimedia cannot play %s; using an external player\n",
                              file.toUtf8().constData());
-        g_effects.remove(file);
-        effect->deleteLater();
+        dropEffect(file);
         if (!playWithInstalledPlayer(file))
             QApplication::beep();
         return;
     }
+
+    if (st != QSoundEffect::Ready) {
+        /* Not loaded yet. QSoundEffect::play() during loading is not
+         * reliable in every Qt 6 release (the first sound of each file can
+         * be lost), so play this one with an external player and let the
+         * effect finish loading for the next time. */
+        purple_debug_info("sound", "Qt Multimedia: %s is %s; playing it with an external player\n",
+                          file.toUtf8().constData(), effectStatusName(st));
+        if (playWithInstalledPlayer(file))
+            return;
+        /* No external player: play once the effect is ready. */
+        QObject *ctx = new QObject(effect);
+        QObject::connect(effect, &QSoundEffect::statusChanged, ctx, [effect, ctx, file]() {
+            const QSoundEffect::Status now = effect->status();
+            if (now == QSoundEffect::Loading || now == QSoundEffect::Null)
+                return;
+            ctx->deleteLater();
+            if (now == QSoundEffect::Ready) {
+                effect->setVolume(qBound(0, purple_prefs_get_int(QTPURPLE_PREF_SOUND_VOLUME), 100) / 100.0);
+                effect->play();
+            } else {
+                QApplication::beep();
+            }
+        });
+        return;
+    }
+
     effect->setVolume(qBound(0, purple_prefs_get_int(QTPURPLE_PREF_SOUND_VOLUME), 100) / 100.0);
-    effect->play();         /* queued until loaded if necessary */
+    effect->play();
+}
+
+/* Load the WAV files of enabled events ahead of time, so that the first
+ * message sound does not wait for (or lose to) loading. */
+void preloadEffects()
+{
+    if (qs(purple_prefs_get_string(QTPURPLE_PREF_SOUND_METHOD)) != QLatin1String("automatic"))
+        return;
+    int n = 0;
+    const Sound::EventInfo *ev = Sound::events(&n);
+    for (int i = 0; i < n; ++i) {
+        if (!purple_prefs_get_bool(Utf8(Sound::enabledPref(ev[i]))))
+            continue;
+        const QString file = Sound::effectiveFile(ev[i]);
+        if (file.endsWith(QLatin1String(".wav"), Qt::CaseInsensitive) && QFileInfo::exists(file))
+            effectFor(file);
+    }
 }
 #endif
 
@@ -401,6 +475,10 @@ void onGotAttention(PurpleAccount *account, const char *, PurpleConversation *co
 
 void uiInit()
 {
+#ifdef QTPURPLE_HAVE_QTMULTIMEDIA
+    /* After prefs.xml has been loaded (ui_init runs before it). */
+    QTimer::singleShot(0, qApp, []() { preloadEffects(); });
+#endif
     void *accounts = purple_accounts_get_handle();
     void *blist = purple_blist_get_handle();
     void *convs = purple_conversations_get_handle();
