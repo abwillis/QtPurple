@@ -16,7 +16,9 @@
 #include <QDate>
 #include <QDateTime>
 #include <QHBoxLayout>
+#include <QBuffer>
 #include <QImage>
+#include <QImageReader>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
@@ -26,6 +28,7 @@
 #include <QFileInfo>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMovie>
 #include <QPixmap>
 #include <QPointer>
 #include <QRegularExpression>
@@ -124,6 +127,80 @@ QVariant HistoryView::loadResource(int, const QUrl &)
     /* Images we want are registered with QTextDocument::addResource();
      * never fetch anything else (remote or file: URLs from messages). */
     return QVariant();
+}
+
+/* Animations that keep running per view; older ones stop on their current
+ * frame so a long history of GIFs does not decode forever. */
+static const int kMaxRunningAnimations = 12;
+/* Larger images are shown as a still first frame. */
+static const int kMaxAnimatedBytes = 16 * 1024 * 1024;
+
+void HistoryView::addAnimation(const QUrl &url, const QByteArray &data)
+{
+    if (data.isEmpty())
+        return;
+    while (m_movies.size() >= kMaxRunningAnimations)
+        delete m_movies.takeFirst();
+
+    QBuffer *buffer = new QBuffer(this);
+    buffer->setData(data);
+    buffer->open(QIODevice::ReadOnly);
+    QMovie *movie = new QMovie(buffer, QByteArray(), this);
+    buffer->setParent(movie);           /* the device lives and dies with the movie */
+    if (!movie->isValid()) {
+        delete movie;
+        return;
+    }
+    connect(movie, &QMovie::frameChanged, this, [this, movie, url](int) {
+        document()->addResource(QTextDocument::ImageResource, url, movie->currentImage());
+        viewport()->update();
+    });
+    m_movies.append(movie);
+    movie->start();
+    if (!isVisible())
+        movie->setPaused(true);         /* resumed by showEvent() */
+}
+
+void HistoryView::clearAnimations()
+{
+    for (QMovie *movie : std::as_const(m_movies))
+        delete movie;
+    m_movies.clear();
+}
+
+void HistoryView::setAnimationsPaused(bool paused)
+{
+    for (QMovie *movie : std::as_const(m_movies)) {
+        if (paused && movie->state() == QMovie::Running)
+            movie->setPaused(true);
+        else if (!paused && movie->state() == QMovie::Paused)
+            movie->setPaused(false);
+    }
+}
+
+void HistoryView::showEvent(QShowEvent *event)
+{
+    QTextBrowser::showEvent(event);
+    setAnimationsPaused(false);
+}
+
+void HistoryView::hideEvent(QHideEvent *event)
+{
+    QTextBrowser::hideEvent(event);
+    setAnimationsPaused(true);
+}
+
+/* Number of frames in encoded image data (1 for still images). */
+static int imageFrameCount(const QByteArray &data)
+{
+    QByteArray copy(data);
+    QBuffer buf(&copy);
+    if (!buf.open(QIODevice::ReadOnly))
+        return 0;
+    QImageReader reader(&buf);
+    if (!reader.supportsAnimation())
+        return 1;
+    return reader.imageCount();
 }
 
 /* ========================================================== chat user item */
@@ -343,6 +420,7 @@ void ConversationView::focusInput()
 
 void ConversationView::clearHistory()
 {
+    m_view->clearAnimations();
     m_view->clear();
     m_lines.clear();
     m_hiddenReactions = 0;
@@ -408,6 +486,7 @@ void ConversationView::setEmojiCodes(bool on)
 
 void ConversationView::rerender()
 {
+    m_view->clearAnimations();
     m_view->clear();
     m_hiddenReactions = 0;
     for (const Line &line : std::as_const(m_lines))
@@ -418,7 +497,7 @@ void ConversationView::rerender()
 
 /* ------------------------------------------------------------- messages */
 
-QString ConversationView::processImages(const QString &html, QList<QPair<QUrl, QImage>> *images)
+QString ConversationView::processImages(const QString &html, QList<LineImage> *images)
 {
     /* libpurple embeds stored images as <img id="N">. */
     static const QRegularExpression re(
@@ -436,9 +515,18 @@ QString ConversationView::processImages(const QString &html, QList<QPair<QUrl, Q
         const int id = m.captured(1).toInt();
         PurpleStoredImage *img = purple_imgstore_find_by_id(id);
         QImage image;
+        QByteArray animation;
         if (img) {
-            image.loadFromData(static_cast<const uchar *>(purple_imgstore_get_data(img)),
-                               int(purple_imgstore_get_size(img)));
+            /* QImage keeps only the first frame of a GIF: keep the encoded
+             * bytes of animated images so the history can play them. */
+            const QByteArray bytes(static_cast<const char *>(purple_imgstore_get_data(img)),
+                                   int(purple_imgstore_get_size(img)));
+            image.loadFromData(bytes);
+            const int frames = image.isNull() ? 0 : imageFrameCount(bytes);
+            if (frames > 1 && bytes.size() <= kMaxAnimatedBytes)
+                animation = bytes;
+            purple_debug_info("qtpurple", "image %d: %d bytes, %d frame(s), animated=%s\n",
+                              id, int(bytes.size()), frames, animation.isEmpty() ? "no" : "yes");
         }
         if (image.isNull()) {
             out += tr("[image]");
@@ -447,7 +535,7 @@ QString ConversationView::processImages(const QString &html, QList<QPair<QUrl, Q
         const QUrl url(QStringLiteral("purpleimg:%1-%2").arg(id).arg(++m_imageCounter));
         m_view->document()->addResource(QTextDocument::ImageResource, url, image);
         if (images)
-            images->append(qMakePair(url, image));
+            images->append(LineImage{ url, image, animation });
         const int maxWidth = 360;
         if (image.width() > maxWidth)
             out += QStringLiteral("<img src=\"%1\" width=\"%2\">").arg(url.toString()).arg(maxWidth);
@@ -499,8 +587,8 @@ void ConversationView::renderLine(const Line &line, bool live)
 
     /* After clear() the document may have dropped its resources. */
     if (!live) {
-        for (const auto &img : line.images)
-            m_view->document()->addResource(QTextDocument::ImageResource, img.first, img.second);
+        for (const LineImage &img : line.images)
+            m_view->document()->addResource(QTextDocument::ImageResource, img.url, img.image);
     }
 
     const QDateTime when = QDateTime::fromSecsSinceEpoch(qint64(line.mtime));
@@ -538,6 +626,10 @@ void ConversationView::renderLine(const Line &line, bool live)
     QScrollBar *sb = m_view->verticalScrollBar();
     const bool atBottom = sb->value() >= sb->maximum() - 4;
     m_view->append(html);
+    for (const LineImage &img : line.images) {
+        if (!img.animation.isEmpty())
+            m_view->addAnimation(img.url, img.animation);
+    }
     if (!live)
         return;
     if (atBottom || (flags & PURPLE_MESSAGE_SEND))

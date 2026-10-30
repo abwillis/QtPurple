@@ -24,6 +24,7 @@ class QLabel;
 class QListWidget;
 class QListWidgetItem;
 class QMenu;
+class QMovie;
 class QSplitter;
 class QTabWidget;
 
@@ -34,6 +35,23 @@ class HistoryView : public QTextBrowser
 public:
     explicit HistoryView(QWidget *parent = nullptr);
     QVariant loadResource(int type, const QUrl &name) override;
+
+    /* Animate the image resource registered under url (see
+     * QTextDocument::addResource) from its encoded bytes, e.g. an animated
+     * GIF. Every frame replaces the resource, so the history shows the
+     * current frame. Only the most recent animations keep running. */
+    void addAnimation(const QUrl &url, const QByteArray &data);
+    /* Stop and free all animations. Call before clearing the document. */
+    void clearAnimations();
+
+protected:
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+
+private:
+    void setAnimationsPaused(bool paused);
+
+    QList<QMovie *> m_movies;       /* oldest first; each owns its buffer */
 };
 
 class ConversationView : public QWidget
@@ -87,6 +105,12 @@ private Q_SLOTS:
     void completeNick();
 
 private:
+    /* An image in a message. */
+    struct LineImage {
+        QUrl url;
+        QImage image;           /* first frame: the static resource */
+        QByteArray animation;   /* encoded bytes when animated; else empty */
+    };
     /* A message as received, kept so the view can be re-rendered when a
      * display option changes. */
     struct Line {
@@ -96,11 +120,11 @@ private:
         time_t mtime;
         bool me;
         bool reaction;
-        QList<QPair<QUrl, QImage>> images;
+        QList<LineImage> images;
     };
 
     bool isChat() const;
-    QString processImages(const QString &html, QList<QPair<QUrl, QImage>> *images);
+    QString processImages(const QString &html, QList<LineImage> *images);
     void renderLine(const Line &line, bool live);
     void rerender();
     PurpleBlistNode *settingsNode() const;
