@@ -8,6 +8,7 @@
 #include "blistwindow.h"
 #include "core.h"
 #include "emoji.h"
+#include "logviewerdialog.h"
 #include "privacydialog.h"
 
 #include <QAction>
@@ -1425,6 +1426,17 @@ ConversationWindow::ConversationWindow()
     });
     addAction(prev);
 
+    /* Ctrl+Shift+L: log of the conversation in the current tab. */
+    QAction *viewLog = new QAction(this);
+    viewLog->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+L")));
+    connect(viewLog, &QAction::triggered, this, [this]() {
+        ConversationView *view = currentView();
+        PurpleConversation *conv = view ? view->conversation() : nullptr;
+        if (conv && conversationExists(conv))
+            LogViewer::showForConversation(conv);
+    });
+    addAction(viewLog);
+
     const int w = purple_prefs_get_int(QTPURPLE_PREF_CONV_W);
     const int h = purple_prefs_get_int(QTPURPLE_PREF_CONV_H);
     resize(w > 200 ? w : 680, h > 150 ? h : 480);
@@ -1673,6 +1685,13 @@ void ConversationWindow::populateConversationMenu()
         });
         invite->setEnabled(gc && info && info->chat_invite);
     }
+
+    /* The shortcut is a permanent action of the window (see the constructor);
+     * the tab only makes the menu show it. */
+    m_convMenu->addAction(tr("View &Log...\tCtrl+Shift+L"), this, [conv]() {
+        if (conversationExists(conv))
+            LogViewer::showForConversation(conv);
+    });
 
     m_convMenu->addSeparator();
     QPointer<ConversationView> guard(view);

@@ -59,6 +59,7 @@ HEADERS += \
     src/trayicon.h \
     src/prefsdialog.h \
     src/emoji.h \
+    src/logviewerdialog.h \
     src/messageinput.h \
     src/roomlistdialog.h \
     src/privacydialog.h
@@ -83,6 +84,7 @@ SOURCES += \
     src/trayicon.cpp \
     src/prefsdialog.cpp \
     src/emoji.cpp \
+    src/logviewerdialog.cpp \
     src/messageinput.cpp \
     src/roomlistdialog.cpp \
     src/privacydialog.cpp

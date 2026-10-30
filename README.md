@@ -31,7 +31,15 @@ Targets libpurple **2.x** (the API was checked against the 2.14.14 headers) and 
 - Formatting toolbar: bold, italic, underline, strikethrough, larger/smaller, font face, text and background color, reset, links, and an emoji picker; Ctrl+B/I/U; buttons the protocol cannot send are disabled, and protocols without HTML get plain text; pasted text is always inserted unformatted; toggle with **Conversation → Show Formatting Toolbar**
 - Images in messages: paste (Ctrl+V), drag and drop image files, or use the toolbar's **Image** button; images show as previews in the message box and are sent inline where the protocol allows it. Otherwise, in an IM you are offered a file transfer instead
 - Block / Unblock in the IM **Conversation** menu
+- Conversation logs: libpurple writes them (Preferences → Logging); **Conversation → View Log…** (Ctrl+Shift+L) opens the log of the conversation in the current tab, and **View Log…** in the buddy and chat context menus opens it without opening the conversation first (see **Conversation logs** below)
 - Reactions and emoji: emoji images sent as web links show their text (the emoji itself or a `:code:`), `:code:` text becomes the Unicode emoji (built-in table plus `<config dir>/emoji.txt`), and reaction notices ("Reacted with …") are shown in italics; both can be switched per conversation in the **Conversation** menu, with defaults under Preferences → Conversations
+
+**Conversation logs**
+- One log viewer window per conversation; asking again raises the existing one. Logs are listed by month, newest first, with the newest already shown
+- A buddy's log covers the whole contact (every buddy merged into it); chat logs are found by the protocol's chat name, also while the account is offline
+- Logs are shown read-only: remote images never load, `:code:` becomes the emoji, links open through the same scheme filter as the conversation view
+- A warning appears in the viewer when logging of that kind of conversation is switched off in Preferences → Logging
+- **Reload** picks up messages logged since the window was opened
 
 **libpurple request/notify UI**
 - Input, choice, action, multi-field forms (string, integer, boolean, choice, list, label, image, account), file and folder dialogs
@@ -144,6 +152,7 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 | Ctrl+Up / Ctrl+Down | Previous / next sent message |
 | Tab | Complete nickname (chats) |
 | Ctrl+W | Close conversation tab |
+| Ctrl+Shift+L | View the log of the current conversation |
 | Ctrl+PgUp / Ctrl+PgDn | Previous / next tab |
 | Ctrl+M / Ctrl+C / Ctrl+I | New IM / Join chat / Get user info |
 | Ctrl+B | Add buddy |
@@ -176,6 +185,7 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 | `src/trayicon.*` | System tray icon and menu |
 | `src/prefsdialog.*` | Preferences dialog |
 | `src/emoji.*` | Emoji `:code:` conversion, blocked-image fallback, reaction detection |
+| `src/logviewerdialog.*` | Conversation log viewer (`purple_log_get_logs()` / `purple_log_read()`) and its entry points |
 | `src/messageinput.*` | Message box (rich text, pasted/dropped images), formatting toolbar, HTML conversion for sending |
 | `src/roomlistdialog.*` | Room list browser, `PurpleRoomlistUiOps` |
 | `src/privacydialog.*` | Privacy settings and lists, `PurplePrivacyUiOps`, block/unblock |
@@ -194,12 +204,13 @@ Additional plugins are loaded from `<config dir>/plugins` as well as libpurple's
 - **Sending images:** each image is copied into libpurple's image store with `purple_imgstore_add_with_id()` and sent as `<img id="N">`, as Pidgin does; whether and how the image reaches the other side is up to the protocol plugin. This is only done when the connection has `PURPLE_CONNECTION_HTML` and not `PURPLE_CONNECTION_NO_IMAGES`. QtPurple releases its image-store reference 60 seconds after sending. Image files are sent with their original bytes (GIF animation is kept); pasted image data is sent as PNG, or as JPEG at quality 90 when the PNG is over 512 KB, the image has no transparency, and the JPEG is less than half the size. The limit is 10 MB per image. For file-transfer fallback the image is written to a temporary file (`qtpurple-image-*` in the system temp directory), which is removed when QtPurple quits.
 - **Room list:** the dialog holds the reference returned by `purple_roomlist_get_list()` and releases it (cancelling a running fetch first) when it fetches again, changes account or closes. Room pointers are dropped in the `destroy` callback.
 - **Privacy:** Block/Unblock use `purple_privacy_deny()`/`purple_privacy_allow()`, which update the lists (and the mode when necessary) the same way Pidgin does. Changing the mode calls `serv_set_permit_deny()` when connected.
+- **Conversation logs:** the log viewer owns the `PurpleLog` objects it lists and frees them with `purple_log_free()` when it closes, except during shutdown, when the loggers are already gone. Log text is read only for the selected entry. The shortcut is a permanent window action because the Conversation menu is rebuilt each time it opens.
 - **Tray:** the menu is rebuilt only when it is closed and never from inside one of its own actions; blinking only swaps the icon.
 - `QT_NO_KEYWORDS` is defined because GLib headers use `signals` as an identifier.
 
 ## Not implemented yet
 
-Showing a protocol's own emoji images (they would have to be downloaded), conversation log viewer, a saved-status editor (saved statuses from Pidgin's `status.xml` can be chosen, but not created), sound themes, per-account proxy settings, custom smileys, voice/video, and spell checking.
+Showing a protocol's own emoji images (they would have to be downloaded), searching or deleting logs in the log viewer, a system-log viewer, a saved-status editor (saved statuses from Pidgin's `status.xml` can be chosen, but not created), sound themes, per-account proxy settings, custom smileys, voice/video, and spell checking.
 
 Idle limitation: on Wayland desktops other than GNOME (e.g. KDE Plasma on Wayland) no system idle source is used, so only activity in QtPurple's windows counts.
 

@@ -9,6 +9,7 @@
 #include "blistdialogs.h"
 #include "core.h"
 #include "debugwindow.h"
+#include "logviewerdialog.h"
 #include "pluginsdialog.h"
 #include "pounces.h"
 #include "prefsdialog.h"
@@ -939,6 +940,11 @@ void BuddyListWindow::buddyMenu(QMenu *menu, PurpleBuddy *buddy, PurpleContact *
         });
     }
 
+    menu->addAction(tr("View &Log..."), this, [this, bnode]() {
+        if (nodeExists(bnode))
+            LogViewer::showForBuddy(PURPLE_BUDDY(bnode));
+    });
+
     menu->addAction(tr("Add Buddy &Pounce..."), this, [account, name]() {
         if (QtPurple::accountExists(account))
             Pounces::editPounce(nullptr, account, QString::fromUtf8(name));
@@ -1046,6 +1052,10 @@ void BuddyListWindow::chatMenu(QMenu *menu, PurpleChat *chat)
     menu->addAction(tr("&Join"), this, [this, node]() {
         if (nodeExists(node))
             joinChat(PURPLE_CHAT(node));
+    });
+    menu->addAction(tr("View &Log..."), this, [this, node]() {
+        if (nodeExists(node))
+            LogViewer::showForChat(PURPLE_CHAT(node));
     });
     menu->addSeparator();
     menu->addAction(tr("&Alias..."), this, [this, node]() {

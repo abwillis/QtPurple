@@ -57,6 +57,7 @@ set(QTPURPLE_SOURCES
     src/trayicon.cpp        src/trayicon.h
     src/prefsdialog.cpp     src/prefsdialog.h
     src/emoji.cpp           src/emoji.h
+    src/logviewerdialog.cpp src/logviewerdialog.h
     src/messageinput.cpp    src/messageinput.h
     src/roomlistdialog.cpp  src/roomlistdialog.h
     src/privacydialog.cpp   src/privacydialog.h
