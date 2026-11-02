@@ -27,6 +27,7 @@ class QMenu;
 class QMovie;
 class QSplitter;
 class QTabWidget;
+class QTimer;
 
 /* Message history view that never loads external or local resources. */
 class HistoryView : public QTextBrowser
@@ -43,15 +44,25 @@ public:
     void addAnimation(const QUrl &url, const QByteArray &data);
     /* Stop and free all animations. Call before clearing the document. */
     void clearAnimations();
+    /* Widest an inline image can be without needing a horizontal scroll bar,
+     * in document pixels; 0 while the view has not been laid out yet. */
+    int imageFitWidth() const { return m_fitWidth; }
+
+Q_SIGNALS:
+    /* imageFitWidth() changed (window or splitter resized). */
+    void fitWidthChanged();
 
 protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void setAnimationsPaused(bool paused);
+    void updateFitWidth();
 
     QList<QMovie *> m_movies;       /* oldest first; each owns its buffer */
+    int m_fitWidth = 0;
 };
 
 class ConversationView : public QWidget
@@ -100,6 +111,8 @@ private Q_SLOTS:
     void send();
     void onTextChanged();
     void onAnchorClicked(const QUrl &url);
+    void onFitWidthChanged();
+    void onViewResized();
     void onUserActivated(QListWidgetItem *item);
     void onUserContextMenu(const QPoint &pos);
     void completeNick();
@@ -126,7 +139,7 @@ private:
     bool isChat() const;
     QString processImages(const QString &html, QList<LineImage> *images);
     void renderLine(const Line &line, bool live);
-    void rerender();
+    void rerender(bool keepScroll = false);
     PurpleBlistNode *settingsNode() const;
     void loadDisplayOptions();
     void saveDisplayOption(const char *key, bool on);
@@ -151,6 +164,12 @@ private:
     QHash<QString, QListWidgetItem *> m_userItems;
     Activity m_activity = NoActivity;
     int m_imageCounter = 0;
+    /* Images are shown at their real size, or scaled down to fit the view.
+     * m_renderedFit is the fit width the history was last rendered with;
+     * m_mixedFit is set when a later message used a different one. */
+    QTimer *m_resizeTimer = nullptr;
+    int m_renderedFit = 0;
+    bool m_mixedFit = false;
     QVector<Line> m_lines;
     bool m_showReactions = true;
     bool m_emojiCodes = true;

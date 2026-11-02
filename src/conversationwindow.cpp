@@ -33,6 +33,7 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -183,12 +184,42 @@ void HistoryView::showEvent(QShowEvent *event)
 {
     QTextBrowser::showEvent(event);
     setAnimationsPaused(false);
+    updateFitWidth();
 }
 
 void HistoryView::hideEvent(QHideEvent *event)
 {
     QTextBrowser::hideEvent(event);
     setAnimationsPaused(true);
+}
+
+/* Smallest width that is believed: a view that has not been laid out yet
+ * (or sits in a hidden tab) reports a default size. */
+static const int kMinFitWidth = 120;
+
+void HistoryView::resizeEvent(QResizeEvent *event)
+{
+    QTextBrowser::resizeEvent(event);
+    updateFitWidth();
+}
+
+void HistoryView::updateFitWidth()
+{
+    const int viewportWidth = viewport()->width();
+    if (viewportWidth < kMinFitWidth)
+        return;
+    int fit = viewportWidth - int(2 * document()->documentMargin()) - 2;
+    /* The scroll bar takes width away once the history grows past the view:
+     * reserve it now so a wide image never forces a horizontal scroll bar. */
+    QScrollBar *bar = verticalScrollBar();
+    if (!bar->isVisible())
+        fit -= bar->sizeHint().width();
+    if (fit < kMinFitWidth)
+        fit = kMinFitWidth;
+    if (fit == m_fitWidth)
+        return;
+    m_fitWidth = fit;
+    Q_EMIT fitWidthChanged();
 }
 
 /* Number of frames in encoded image data (1 for still images). */
@@ -280,6 +311,12 @@ ConversationView::ConversationView(PurpleConversation *conv, QWidget *parent)
     /* History */
     m_view = new HistoryView(this);
     connect(m_view, &QTextBrowser::anchorClicked, this, &ConversationView::onAnchorClicked);
+    /* Images follow the width of the view: re-render after a resize settles. */
+    m_resizeTimer = new QTimer(this);
+    m_resizeTimer->setSingleShot(true);
+    m_resizeTimer->setInterval(150);
+    connect(m_resizeTimer, &QTimer::timeout, this, &ConversationView::onViewResized);
+    connect(m_view, &HistoryView::fitWidthChanged, this, &ConversationView::onFitWidthChanged);
 
     /* Input */
     m_typing = new QLabel(this);
@@ -485,15 +522,58 @@ void ConversationView::setEmojiCodes(bool on)
     rerender();
 }
 
-void ConversationView::rerender()
+void ConversationView::rerender(bool keepScroll)
 {
+    QScrollBar *sb = m_view->verticalScrollBar();
+    const bool atBottom = sb->value() >= sb->maximum() - 4;
+    const int oldValue = sb->value();
     m_view->clearAnimations();
     m_view->clear();
     m_hiddenReactions = 0;
+    m_renderedFit = m_view->imageFitWidth();
+    m_mixedFit = false;
     for (const Line &line : std::as_const(m_lines))
         renderLine(line, false);
-    QScrollBar *sb = m_view->verticalScrollBar();
-    sb->setValue(sb->maximum());
+    if (keepScroll && !atBottom)
+        sb->setValue(qMin(oldValue, sb->maximum()));
+    else
+        sb->setValue(sb->maximum());
+}
+
+/* Width an image is shown at: its real width, or the fit width when it is
+ * wider than the view (fit <= 0: not known yet, show the real size). */
+static int fitImageWidth(int natural, int fit)
+{
+    return (fit > 0 && natural > fit) ? fit : natural;
+}
+
+void ConversationView::onFitWidthChanged()
+{
+    m_resizeTimer->start();
+}
+
+void ConversationView::onViewResized()
+{
+    const int fit = m_view->imageFitWidth();
+    if (fit == m_renderedFit && !m_mixedFit)
+        return;
+    bool affected = m_mixedFit;
+    for (const Line &line : std::as_const(m_lines)) {
+        for (const LineImage &img : line.images) {
+            const int w = img.image.width();
+            if (fitImageWidth(w, fit) != fitImageWidth(w, m_renderedFit)) {
+                affected = true;
+                break;
+            }
+        }
+        if (affected)
+            break;
+    }
+    if (!affected) {
+        m_renderedFit = fit;        /* no image changes size: nothing to redraw */
+        return;
+    }
+    rerender(true);
 }
 
 /* ------------------------------------------------------------- messages */
@@ -537,11 +617,9 @@ QString ConversationView::processImages(const QString &html, QList<LineImage> *i
         m_view->document()->addResource(QTextDocument::ImageResource, url, image);
         if (images)
             images->append(LineImage{ url, image, animation });
-        const int maxWidth = 360;
-        if (image.width() > maxWidth)
-            out += QStringLiteral("<img src=\"%1\" width=\"%2\">").arg(url.toString()).arg(maxWidth);
-        else
-            out += QStringLiteral("<img src=\"%1\">").arg(url.toString());
+        /* No size here: renderLine() adds width/height for the current view
+         * width, so the line can be redrawn when the window is resized. */
+        out += QStringLiteral("<img src=\"%1\">").arg(url.toString());
     }
     out += html.mid(last);
     return out;
@@ -597,7 +675,22 @@ void ConversationView::renderLine(const Line &line, bool live)
     const QString ts = when.toString(showDate ? QStringLiteral("yyyy-MM-dd HH:mm:ss")
                                               : QStringLiteral("HH:mm:ss"));
 
-    const QString body = Emoji::render(line.body, m_emojiCodes);
+    /* Real size, or scaled down (keeping the aspect ratio) to fit the view. */
+    const int fit = m_view->imageFitWidth();
+    if (live && fit != m_renderedFit)
+        m_mixedFit = true;
+    QString body = Emoji::render(line.body, m_emojiCodes);
+    for (const LineImage &img : line.images) {
+        const int w = img.image.width();
+        const int h = img.image.height();
+        if (w <= 0 || h <= 0)
+            continue;
+        const int shownW = fitImageWidth(w, fit);
+        const int shownH = (shownW == w) ? h : qMax(1, qRound(double(h) * shownW / w));
+        const QString plain = QStringLiteral("<img src=\"%1\">").arg(img.url.toString());
+        body.replace(plain, QStringLiteral("<img src=\"%1\" width=\"%2\" height=\"%3\">")
+                                .arg(img.url.toString()).arg(shownW).arg(shownH));
+    }
     const QString &name = line.name;
     const QString stamp = purple_prefs_get_bool(QTPURPLE_PREF_TIMESTAMPS)
         ? QStringLiteral("<span style=\"color:#888a85\">(%1)</span> ").arg(ts)
