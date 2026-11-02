@@ -94,6 +94,13 @@ target_link_libraries(qtpurple PRIVATE
     PkgConfig::PURPLE
 )
 
+# OS/2: LIBCx must be linked into the executable itself for its extensions
+# (including the mmap exception handler) to be fully active. Qt5 on OS/2
+# memory-maps plugin DLLs while QApplication starts.
+if(CMAKE_SYSTEM_NAME MATCHES "OS2")
+    target_link_libraries(qtpurple PRIVATE cx)
+endif()
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(qtpurple PRIVATE -Wall -Wextra -Wno-unused-parameter
                                             -Wno-missing-field-initializers)
